@@ -1,29 +1,116 @@
+diff --git a/net/9p/client.c b/net/9p/client.c
+index e86a9bea1d16..53fe98ee8a55 100644
+--- a/net/9p/client.c
++++ b/net/9p/client.c
+@@ -850,7 +850,8 @@ static struct p9_req_t *p9_client_zc_rpc(struct p9_client *c, int8_t type,
+ 	if (err < 0) {
+ 		if (err == -EIO)
+ 			c->status = Disconnected;
+-		goto reterr;
++		if (err != -ERESTARTSYS)
++			goto reterr;
+ 	}
+ 	if (req->status == REQ_STATUS_ERROR) {
+ 		p9_debug(P9_DEBUG_ERROR, "req_status error %d\n", req->t_err);
+diff --git a/net/can/af_can.c b/net/can/af_can.c
+index 9a3244941a5c..d6030d6949df 100644
+--- a/net/can/af_can.c
++++ b/net/can/af_can.c
+@@ -313,12 +313,8 @@ int can_send(struct sk_buff *skb, int loop)
+ 		return err;
+ 	}
+ 
+-	if (newskb) {
+-		if (!(newskb->tstamp.tv64))
+-			__net_timestamp(newskb);
+-
++	if (newskb)
+ 		netif_rx_ni(newskb);
+-	}
+ 
+ 	/* update statistics */
+ 	can_stats.tx_frames++;
+diff --git a/net/mac80211/main.c b/net/mac80211/main.c
+index 0de7c93bf62b..67943cb5df8a 100644
+--- a/net/mac80211/main.c
++++ b/net/mac80211/main.c
+@@ -249,6 +249,7 @@ static void ieee80211_restart_work(struct work_struct *work)
+ {
+ 	struct ieee80211_local *local =
+ 		container_of(work, struct ieee80211_local, restart_work);
++	struct ieee80211_sub_if_data *sdata;
+ 
+ 	/* wait for scan work complete */
+ 	flush_workqueue(local->workqueue);
+@@ -257,6 +258,8 @@ static void ieee80211_restart_work(struct work_struct *work)
+ 	     "%s called with hardware scan in progress\n", __func__);
+ 
+ 	rtnl_lock();
++	list_for_each_entry(sdata, &local->interfaces, list)
++		flush_delayed_work(&sdata->dec_tailroom_needed_wk);
+ 	ieee80211_scan_cancel(local);
+ 	ieee80211_reconfig(local);
+ 	rtnl_unlock();
+diff --git a/security/integrity/evm/evm_main.c b/security/integrity/evm/evm_main.c
+index c5ee1a7c5e8a..4ada1a97a60b 100644
+--- a/security/integrity/evm/evm_main.c
++++ b/security/integrity/evm/evm_main.c
+@@ -22,6 +22,7 @@
+ #include <linux/xattr.h>
+ #include <linux/integrity.h>
+ #include <linux/evm.h>
++#include <linux/magic.h>
+ #include <crypto/hash.h>
+ #include "evm.h"
+ 
+@@ -291,6 +292,17 @@ static int evm_protect_xattr(struct dentry *dentry, const char *xattr_name,
+ 		iint = integrity_iint_find(dentry->d_inode);
+ 		if (iint && (iint->flags & IMA_NEW_FILE))
+ 			return 0;
++
++		/* exception for pseudo filesystems */
++		if (dentry->d_inode->i_sb->s_magic == TMPFS_MAGIC
++		    || dentry->d_inode->i_sb->s_magic == SYSFS_MAGIC)
++			return 0;
++
++		integrity_audit_msg(AUDIT_INTEGRITY_METADATA,
++				    dentry->d_inode, dentry->d_name.name,
++				    "update_metadata",
++				    integrity_status_msg[evm_status],
++				    -EPERM, 0);
+ 	}
+ out:
+ 	if (evm_status != INTEGRITY_PASS)
+diff --git a/security/keys/keyring.c b/security/keys/keyring.c
+index e72548b5897e..d33437007ad2 100644
+--- a/security/keys/keyring.c
++++ b/security/keys/keyring.c
+@@ -1181,9 +1181,11 @@ void __key_link_end(struct key *keyring,
+ 	if (index_key->type == &key_type_keyring)
+ 		up_write(&keyring_serialise_link_sem);
+ 
+-	if (edit && !edit->dead_leaf) {
+-		key_payload_reserve(keyring,
+-				    keyring->datalen - KEYQUOTA_LINK_BYTES);
++	if (edit) {
++		if (!edit->dead_leaf) {
++			key_payload_reserve(keyring,
++				keyring->datalen - KEYQUOTA_LINK_BYTES);
++		}
+ 		assoc_array_cancel_edit(edit);
+ 	}
+ 	up_write(&keyring->sem);
+diff --git a/sound/soc/fsl/imx-wm8962.c b/sound/soc/fsl/imx-wm8962.c
+index 3a3d17ce6ba4..664452599497 100644
+--- a/sound/soc/fsl/imx-wm8962.c
++++ b/sound/soc/fsl/imx-wm8962.c
+@@ -190,7 +190,7 @@ static int imx_wm8962_probe(struct platform_device *pdev)
+ 		dev_err(&pdev->dev, "audmux internal port setup failed\n");
+ 		return ret;
+ 	}
+-	imx_audmux_v2_configure_port(ext_port,
++	ret = imx_audmux_v2_configure_port(ext_port,
+ 			IMX_AUDMUX_V2_PTCR_SYN,
+ 			IMX_AUDMUX_V2_PDCR_RXDSEL(int_port));
+ 	if (ret) {
 
-diff --git a/include/linux/libata.h b/include/linux/libata.h
-index b3a816f4c0c4..8f6a07441b85 100644
---- a/include/linux/libata.h
-+++ b/include/linux/libata.h
-@@ -429,6 +429,7 @@ enum {
- 	ATA_HORKAGE_NO_NCQ_TRIM	= (1 << 19),	/* don't use queued TRIM */
- 	ATA_HORKAGE_NOLPM	= (1 << 20),	/* don't use LPM */
- 	ATA_HORKAGE_WD_BROKEN_LPM = (1 << 21),	/* some WDs have broken LPM */
-+	ATA_HORKAGE_NOTRIM = (1 << 24),		/* don't use TRIM */
- 
- 	 /* DMA mask for user DMA control: User visible values; DO NOT
- 	    renumber */
-diff --git a/include/linux/of.h b/include/linux/of.h
-index ce9f6a2b3532..4a6a489a7506 100644
---- a/include/linux/of.h
-+++ b/include/linux/of.h
-@@ -593,7 +593,10 @@ static inline const char *of_prop_next_string(struct property *prop,
- #if defined(CONFIG_OF) && defined(CONFIG_NUMA)
- extern int of_node_to_nid(struct device_node *np);
- #else
--static inline int of_node_to_nid(struct device_node *device) { return 0; }
-+static inline int of_node_to_nid(struct device_node *device)
-+{
-+	return NUMA_NO_NODE;
-+}
- #endif
- 
- static inline struct device_node *of_find_matching_node(
