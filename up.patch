@@ -1,0 +1,212 @@
+
+diff --git a/drivers/usb/core/devio.c b/drivers/usb/core/devio.c
+index e500243803d8..a85eadff6bea 100644
+--- a/drivers/usb/core/devio.c
++++ b/drivers/usb/core/devio.c
+@@ -513,7 +513,7 @@ static void async_completed(struct urb *urb)
+ 	snoop(&urb->dev->dev, "urb complete\n");
+ 	snoop_urb(urb->dev, as->userurb, urb->pipe, urb->actual_length,
+ 			as->status, COMPLETE, NULL, 0);
+-	if ((urb->transfer_flags & URB_DIR_MASK) == USB_DIR_IN)
++	if ((urb->transfer_flags & URB_DIR_MASK) == URB_DIR_IN)
+ 		snoop_urb_data(urb, urb->actual_length);
+ 
+ 	if (as->status < 0 && as->bulk_addr && as->status != -ECONNRESET &&
+@@ -1690,7 +1690,7 @@ static struct async *reap_as(struct usb_dev_state *ps)
+ 	for (;;) {
+ 		__set_current_state(TASK_INTERRUPTIBLE);
+ 		as = async_getcompleted(ps);
+-		if (as)
++		if (as || !connected(ps))
+ 			break;
+ 		if (signal_pending(current))
+ 			break;
+@@ -1713,7 +1713,7 @@ static int proc_reapurb(struct usb_dev_state *ps, void __user *arg)
+ 	}
+ 	if (signal_pending(current))
+ 		return -EINTR;
+-	return -EIO;
++	return -ENODEV;
+ }
+ 
+ static int proc_reapurbnonblock(struct usb_dev_state *ps, void __user *arg)
+@@ -1722,10 +1722,11 @@ static int proc_reapurbnonblock(struct usb_dev_state *ps, void __user *arg)
+ 	struct async *as;
+ 
+ 	as = async_getcompleted(ps);
+-	retval = -EAGAIN;
+ 	if (as) {
+ 		retval = processcompl(as, (void __user * __user *)arg);
+ 		free_async(as);
++	} else {
++		retval = (connected(ps) ? -EAGAIN : -ENODEV);
+ 	}
+ 	return retval;
+ }
+@@ -1855,7 +1856,7 @@ static int proc_reapurb_compat(struct usb_dev_state *ps, void __user *arg)
+ 	}
+ 	if (signal_pending(current))
+ 		return -EINTR;
+-	return -EIO;
++	return -ENODEV;
+ }
+ 
+ static int proc_reapurbnonblock_compat(struct usb_dev_state *ps, void __user *arg)
+@@ -1863,11 +1864,12 @@ static int proc_reapurbnonblock_compat(struct usb_dev_state *ps, void __user *ar
+ 	int retval;
+ 	struct async *as;
+ 
+-	retval = -EAGAIN;
+ 	as = async_getcompleted(ps);
+ 	if (as) {
+ 		retval = processcompl_compat(as, (void __user * __user *)arg);
+ 		free_async(as);
++	} else {
++		retval = (connected(ps) ? -EAGAIN : -ENODEV);
+ 	}
+ 	return retval;
+ }
+@@ -2039,7 +2041,8 @@ static int proc_get_capabilities(struct usb_dev_state *ps, void __user *arg)
+ {
+ 	__u32 caps;
+ 
+-	caps = USBDEVFS_CAP_ZERO_PACKET | USBDEVFS_CAP_NO_PACKET_SIZE_LIM;
++	caps = USBDEVFS_CAP_ZERO_PACKET | USBDEVFS_CAP_NO_PACKET_SIZE_LIM |
++			USBDEVFS_CAP_REAP_AFTER_DISCONNECT;
+ 	if (!ps->dev->bus->no_stop_on_short)
+ 		caps |= USBDEVFS_CAP_BULK_CONTINUATION;
+ 	if (ps->dev->bus->sg_tablesize)
+@@ -2139,6 +2142,32 @@ static long usbdev_do_ioctl(struct file *file, unsigned int cmd,
+ 		return -EPERM;
+ 
+ 	usb_lock_device(dev);
++
++	/* Reap operations are allowed even after disconnection */
++	switch (cmd) {
++	case USBDEVFS_REAPURB:
++		snoop(&dev->dev, "%s: REAPURB\n", __func__);
++		ret = proc_reapurb(ps, p);
++		goto done;
++
++	case USBDEVFS_REAPURBNDELAY:
++		snoop(&dev->dev, "%s: REAPURBNDELAY\n", __func__);
++		ret = proc_reapurbnonblock(ps, p);
++		goto done;
++
++#ifdef CONFIG_COMPAT
++	case USBDEVFS_REAPURB32:
++		snoop(&dev->dev, "%s: REAPURB32\n", __func__);
++		ret = proc_reapurb_compat(ps, p);
++		goto done;
++
++	case USBDEVFS_REAPURBNDELAY32:
++		snoop(&dev->dev, "%s: REAPURBNDELAY32\n", __func__);
++		ret = proc_reapurbnonblock_compat(ps, p);
++		goto done;
++#endif
++	}
++
+ 	if (!connected(ps)) {
+ 		usb_unlock_device(dev);
+ 		return -ENODEV;
+@@ -2232,16 +2261,6 @@ static long usbdev_do_ioctl(struct file *file, unsigned int cmd,
+ 			inode->i_mtime = CURRENT_TIME;
+ 		break;
+ 
+-	case USBDEVFS_REAPURB32:
+-		snoop(&dev->dev, "%s: REAPURB32\n", __func__);
+-		ret = proc_reapurb_compat(ps, p);
+-		break;
+-
+-	case USBDEVFS_REAPURBNDELAY32:
+-		snoop(&dev->dev, "%s: REAPURBNDELAY32\n", __func__);
+-		ret = proc_reapurbnonblock_compat(ps, p);
+-		break;
+-
+ 	case USBDEVFS_IOCTL32:
+ 		snoop(&dev->dev, "%s: IOCTL32\n", __func__);
+ 		ret = proc_ioctl_compat(ps, ptr_to_compat(p));
+@@ -2253,16 +2272,6 @@ static long usbdev_do_ioctl(struct file *file, unsigned int cmd,
+ 		ret = proc_unlinkurb(ps, p);
+ 		break;
+ 
+-	case USBDEVFS_REAPURB:
+-		snoop(&dev->dev, "%s: REAPURB\n", __func__);
+-		ret = proc_reapurb(ps, p);
+-		break;
+-
+-	case USBDEVFS_REAPURBNDELAY:
+-		snoop(&dev->dev, "%s: REAPURBNDELAY\n", __func__);
+-		ret = proc_reapurbnonblock(ps, p);
+-		break;
+-
+ 	case USBDEVFS_DISCSIGNAL:
+ 		snoop(&dev->dev, "%s: DISCSIGNAL\n", __func__);
+ 		ret = proc_disconnectsignal(ps, p);
+@@ -2305,6 +2314,8 @@ static long usbdev_do_ioctl(struct file *file, unsigned int cmd,
+ 		ret = proc_free_streams(ps, p);
+ 		break;
+ 	}
++
++ done:
+ 	usb_unlock_device(dev);
+ 	if (ret >= 0)
+ 		inode->i_atime = CURRENT_TIME;
+diff --git a/drivers/usb/dwc3/ep0.c b/drivers/usb/dwc3/ep0.c
+index df38e7ef4976..bdc995da3420 100644
+--- a/drivers/usb/dwc3/ep0.c
++++ b/drivers/usb/dwc3/ep0.c
+@@ -727,6 +727,10 @@ static int dwc3_ep0_std_request(struct dwc3 *dwc, struct usb_ctrlrequest *ctrl)
+ 		dwc3_trace(trace_dwc3_ep0, "USB_REQ_SET_ISOCH_DELAY\n");
+ 		ret = dwc3_ep0_set_isoch_delay(dwc, ctrl);
+ 		break;
++	case USB_REQ_SET_INTERFACE:
++		dev_vdbg(dwc->dev, "USB_REQ_SET_INTERFACE\n");
++		dwc->start_config_issued = false;
++		/* Fall through */
+ 	default:
+ 		dwc3_trace(trace_dwc3_ep0, "Forwarding to gadget driver\n");
+ 		ret = dwc3_ep0_delegate_req(dwc, ctrl);
+diff --git a/drivers/usb/host/xhci-mem.c b/drivers/usb/host/xhci-mem.c
+index 5cb3d7a10017..a67018eddf41 100644
+--- a/drivers/usb/host/xhci-mem.c
++++ b/drivers/usb/host/xhci-mem.c
+@@ -1431,10 +1431,10 @@ int xhci_endpoint_init(struct xhci_hcd *xhci,
+ 		/* Attempt to use the ring cache */
+ 		if (virt_dev->num_rings_cached == 0)
+ 			return -ENOMEM;
++		virt_dev->num_rings_cached--;
+ 		virt_dev->eps[ep_index].new_ring =
+ 			virt_dev->ring_cache[virt_dev->num_rings_cached];
+ 		virt_dev->ring_cache[virt_dev->num_rings_cached] = NULL;
+-		virt_dev->num_rings_cached--;
+ 		xhci_reinit_cached_ring(xhci, virt_dev->eps[ep_index].new_ring,
+ 					1, type);
+ 	}
+diff --git a/drivers/usb/musb/musb_virthub.c b/drivers/usb/musb/musb_virthub.c
+index 0241a3a0d63e..1e9bde4fe785 100644
+--- a/drivers/usb/musb/musb_virthub.c
++++ b/drivers/usb/musb/musb_virthub.c
+@@ -273,9 +273,7 @@ static int musb_has_gadget(struct musb *musb)
+ #ifdef CONFIG_USB_MUSB_HOST
+ 	return 1;
+ #else
+-	if (musb->port_mode == MUSB_PORT_MODE_HOST)
+-		return 1;
+-	return musb->g.dev.driver != NULL;
++	return musb->port_mode == MUSB_PORT_MODE_HOST;
+ #endif
+ }
+ 
+diff --git a/drivers/usb/serial/cp210x.c b/drivers/usb/serial/cp210x.c
+index ffd739e31bfc..eac7ccaa3c85 100644
+--- a/drivers/usb/serial/cp210x.c
++++ b/drivers/usb/serial/cp210x.c
+@@ -187,6 +187,7 @@ static const struct usb_device_id id_table[] = {
+ 	{ USB_DEVICE(0x1FB9, 0x0602) }, /* Lake Shore Model 648 Magnet Power Supply */
+ 	{ USB_DEVICE(0x1FB9, 0x0700) }, /* Lake Shore Model 737 VSM Controller */
+ 	{ USB_DEVICE(0x1FB9, 0x0701) }, /* Lake Shore Model 776 Hall Matrix */
++	{ USB_DEVICE(0x2626, 0xEA60) }, /* Aruba Networks 7xxx USB Serial Console */
+ 	{ USB_DEVICE(0x3195, 0xF190) }, /* Link Instruments MSO-19 */
+ 	{ USB_DEVICE(0x3195, 0xF280) }, /* Link Instruments MSO-28 */
+ 	{ USB_DEVICE(0x3195, 0xF281) }, /* Link Instruments MSO-28 */
