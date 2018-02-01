@@ -2635,7 +2635,7 @@ int drm_mode_setcrtc(struct drm_device *dev, void *data,
 		return -EINVAL;
 
 	/* For some reason crtc x/y offsets are signed internally. */
-	if (crtc_req->x > INT_MAX || crtc_req->y > INT_MAX)
+	if (crtc_req->x & 0xffff0000 || crtc_req->y & 0xffff0000)
 		return -ERANGE;
 
 	drm_modeset_lock_all(dev);
