@@ -229,7 +229,7 @@ asmlinkage void secondary_start_kernel(void)
 
 	aee_rr_rec_hoplug(cpu, 13, 0);
 
-	local_dbg_enable();
+	
 
 	aee_rr_rec_hoplug(cpu, 14, 0);
 
