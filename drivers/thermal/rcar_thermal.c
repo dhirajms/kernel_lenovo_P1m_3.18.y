@@ -372,6 +372,7 @@ static int rcar_thermal_probe(struct platform_device *pdev)
 	int i;
 	int ret = -ENODEV;
 	int idle = IDLE_INTERVAL;
+	u32 enr_bits = 0;
 
 	common = devm_kzalloc(dev, sizeof(*common), GFP_KERNEL);
 	if (!common)
