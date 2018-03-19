@@ -37,6 +37,7 @@ struct mt_rt_mon_struct {
 	u64 cost_cputime;
 	u32 cputime_percen_6;
 	u64 isr_time;
+	u64 cost_isrtime;
 };
 
 static struct mt_rt_mon_struct mt_rt_mon_head = {
@@ -47,8 +48,9 @@ static int mt_rt_mon_enabled;
 static int rt_mon_count;
 static unsigned long long rt_start_ts, rt_end_ts, rt_dur_ts;
 static DEFINE_SPINLOCK(mt_rt_mon_lock);
-
-
+static struct mt_rt_mon_struct buffer[MAX_THROTTLE_COUNT];
+static int rt_mon_count_buffer;
+static unsigned long long rt_start_ts_buffer, rt_end_ts_buffer, rt_dur_ts_buffer;
 /*
  * Ease the printing of nsec fields:
  */
@@ -96,6 +98,8 @@ static void store_rt_mon_info(struct task_struct *p)
 	mtmon->cputime = p->se.sum_exec_runtime;
 	mtmon->cputime_init = p->se.sum_exec_runtime;
 	mtmon->isr_time = p->se.mtk_isr_time;
+	mtmon->cost_cputime = 0;
+	mtmon->cost_isrtime = 0;
 	list_add(&(mtmon->list), &(mt_rt_mon_head.list));
 
 	spin_unlock_irqrestore(&mt_rt_mon_lock, irq_flags);
@@ -110,11 +114,6 @@ void setup_mt_rt_mon_info(struct task_struct *p)
 	spin_lock_irqsave(&mt_rt_mon_lock, irq_flags);
 
 	if (0 == mt_rt_mon_enabled) {
-		spin_unlock_irqrestore(&mt_rt_mon_lock, irq_flags);
-		return;
-	}
-
-	if (p->policy != SCHED_FIFO && p->policy != SCHED_RR) {
 		spin_unlock_irqrestore(&mt_rt_mon_lock, irq_flags);
 		return;
 	}
@@ -157,6 +156,8 @@ void start_rt_mon_task(void)
 	read_lock_irqsave(&tasklist_lock, flags);
 
 	do_each_thread(g, p) {
+		if (!task_has_rt_policy(p))
+			continue;
 		setup_mt_rt_mon_info(p);
 	} while_each_thread(g, p);
 
@@ -180,22 +181,28 @@ void stop_rt_mon_task(void)
 
 	list_for_each_entry(tmp, &mt_rt_mon_head.list, list) {
 		tsk = find_task_by_vpid(tmp->pid);
-		if (tsk != NULL) {
+		if (tsk && task_has_rt_policy(tsk)) {
 			tmp->cputime = tsk->se.sum_exec_runtime;
 			tmp->isr_time =
 				tsk->se.mtk_isr_time - tmp->isr_time;
+			tmp->cost_isrtime += tmp->isr_time;
 			strcpy(tmp->comm, tsk->comm);
+			tmp->prio = tsk->prio;
 		}
 
-		if (tmp->cputime >= (tmp->cputime_init + tmp->isr_time)) {
+		if (tmp->cputime >= (tmp->cputime_init + tmp->cost_isrtime)) {
 			cost_cputime =
-			   tmp->cputime - tmp->isr_time - tmp->cputime_init;
-			tmp->cost_cputime = cost_cputime;
-			do_div(cost_cputime, rt_dur_ts);
+			   tmp->cputime - tmp->cost_isrtime - tmp->cputime_init;
+			tmp->cost_cputime += cost_cputime;
+			if (rt_dur_ts == 0)
+				cost_cputime = 0;
+			else
+				do_div(cost_cputime, rt_dur_ts);
 			tmp->cputime_percen_6 = cost_cputime;
 		} else {
 			tmp->cost_cputime = 0;
 			tmp->cputime_percen_6 = 0;
+			tmp->cost_isrtime = 0;
 		}
 	}
 	spin_unlock_irqrestore(&mt_rt_mon_lock, irq_flags);
@@ -213,9 +220,13 @@ void reset_rt_mon_list(void)
 
 	list_for_each_entry_safe(tmp, tmp2, &mt_rt_mon_head.list, list) {
 		tsk = find_task_by_vpid(tmp->pid);
-		if (tsk) {
+		if (tsk && task_has_rt_policy(tsk)) {
 			tmp->cost_cputime = 0;
 			tmp->cputime_percen_6 = 0;
+			tmp->cost_isrtime = 0;
+			tmp->prio = tsk->prio;
+			tmp->cputime_init = tsk->se.sum_exec_runtime;
+			tmp->isr_time = tsk->se.mtk_isr_time;
 		} else {
 			rt_mon_count--;
 			list_del(&(tmp->list));
@@ -248,6 +259,11 @@ void mt_rt_mon_print_task(void)
 	int count = 0;
 	struct mt_rt_mon_struct *tmp;
 
+	rt_mon_count_buffer = rt_mon_count;
+	rt_start_ts_buffer = rt_start_ts;
+	rt_end_ts_buffer =  rt_end_ts;
+	rt_dur_ts_buffer = rt_dur_ts;
+
 	pr_err(
 		"sched: mon_count = %d monitor start[%lld.%06lu] end[%lld.%06lu] dur[%lld.%06lu]\n",
 		rt_mon_count, SPLIT_NS_H(rt_start_ts), SPLIT_NS_L(rt_start_ts),
@@ -260,12 +276,11 @@ void mt_rt_mon_print_task(void)
 	list_sort(NULL, &mt_rt_mon_head.list, mt_rt_mon_cmp);
 
 	list_for_each_entry(tmp, &mt_rt_mon_head.list, list) {
-
+		memcpy(&buffer[count], tmp, sizeof(struct mt_rt_mon_struct));
 		count++;
-		pr_err("sched: exec_task [%s] pid:%d prio:%d: cputime[%lld.%06lu]",
+		pr_err("sched:[%s] pid:%d prio:%d cputime[%lld.%06lu] percen[%d.%04d%%] isr_time[%lld.%06lu]\n",
 			tmp->comm, tmp->pid, tmp->prio,
-			SPLIT_NS_H(tmp->cost_cputime), SPLIT_NS_L(tmp->cost_cputime));
-		pr_err(" percen[%d.%04d%%] isr_time[%lld.%06lu]\n",
+			SPLIT_NS_H(tmp->cost_cputime), SPLIT_NS_L(tmp->cost_cputime),
 			tmp->cputime_percen_6 / 10000, tmp->cputime_percen_6 % 10000,
 			SPLIT_NS_H(tmp->isr_time), SPLIT_NS_L(tmp->isr_time));
 
@@ -274,6 +289,28 @@ void mt_rt_mon_print_task(void)
 	}
 
 	spin_unlock_irqrestore(&mt_rt_mon_lock, irq_flags);
+}
+
+void mt_rt_mon_print_task_from_buffer(void)
+{
+	int i;
+
+	pr_err("last throttle information start\n");
+	pr_err("sched: mon_count = %d monitor start[%lld.%06lu] end[%lld.%06lu] dur[%lld.%06lu]\n",
+		rt_mon_count_buffer, SPLIT_NS_H(rt_start_ts_buffer), SPLIT_NS_L(rt_start_ts_buffer),
+		SPLIT_NS_H(rt_end_ts_buffer), SPLIT_NS_L(rt_end_ts_buffer),
+		SPLIT_NS_H((rt_end_ts_buffer - rt_start_ts_buffer)),
+		SPLIT_NS_L((rt_end_ts_buffer - rt_start_ts_buffer)));
+
+	for (i = 0 ; i < MAX_THROTTLE_COUNT ; i++)  {
+		pr_err("sched:[%s] pid:%d prio:%d cputime[%lld.%06lu] percen[%d.%04d%%] isr_time[%lld.%06lu]\n",
+			buffer[i].comm, buffer[i].pid, buffer[i].prio,
+			SPLIT_NS_H(buffer[i].cost_cputime), SPLIT_NS_L(buffer[i].cost_cputime),
+			buffer[i].cputime_percen_6 / 10000, buffer[i].cputime_percen_6 % 10000,
+			SPLIT_NS_H(buffer[i].isr_time), SPLIT_NS_L(buffer[i].isr_time));
+	}
+
+	pr_err("last throttle information end\n");
 }
 
 void mt_rt_mon_switch(int on)
@@ -342,7 +379,7 @@ void end_mt_rt_mon_info(struct task_struct *p)
 		return;
 	}
 
-	if (p->policy != SCHED_FIFO && p->policy != SCHED_RR) {
+	if (!task_has_rt_policy(p)) {
 		spin_unlock_irqrestore(&mt_rt_mon_lock, irq_flags);
 		return;
 	}
@@ -354,17 +391,63 @@ void end_mt_rt_mon_info(struct task_struct *p)
 			/* update cputime */
 			tmp->cputime = p->se.sum_exec_runtime;
 			tmp->isr_time = p->se.mtk_isr_time - tmp->isr_time;
+			tmp->cost_isrtime += tmp->isr_time;
 			find = 1;
 			break;
 		}
 	}
-	if (!find) {
+	if (!find)
 		pr_err("pid:%d can't be found in mtsched proc_info.\n", p->pid);
-	}
 
 	spin_unlock_irqrestore(&mt_rt_mon_lock, irq_flags);
 
 }
+void check_mt_rt_mon_info(struct task_struct *p)
+{
+	struct mt_rt_mon_struct *tmp;
+	unsigned long irq_flags;
+	unsigned long long cost_cputime = 0;
+	int find = 0;
+
+	spin_lock_irqsave(&mt_rt_mon_lock, irq_flags);
+
+	/* check profiling enable flag */
+	if (0 == mt_rt_mon_enabled) {
+		spin_unlock_irqrestore(&mt_rt_mon_lock, irq_flags);
+		return;
+	}
+
+	list_for_each_entry(tmp, &mt_rt_mon_head.list, list) {
+		if (!find && p->pid == tmp->pid) {
+			tmp->prio = p->prio;
+			strcpy(tmp->comm, p->comm);
+			tmp->cputime = p->se.sum_exec_runtime;
+			if (!task_has_rt_policy(p)) {
+				tmp->isr_time =
+					p->se.mtk_isr_time - tmp->isr_time;
+				tmp->cost_isrtime += tmp->isr_time;
+				if (tmp->cputime >= (tmp->cputime_init + tmp->cost_isrtime)) {
+					cost_cputime =
+						tmp->cputime - tmp->cost_isrtime - tmp->cputime_init;
+					tmp->cost_cputime += cost_cputime;
+				} else {
+					tmp->cost_cputime = 0;
+				}
+			}
+			tmp->cputime_init = p->se.sum_exec_runtime;
+			tmp->isr_time = p->se.mtk_isr_time;
+			find = 1;
+			break;
+		}
+	}
+
+	spin_unlock_irqrestore(&mt_rt_mon_lock, irq_flags);
+
+	if (!find && task_has_rt_policy(p))
+		store_rt_mon_info(p);
+
+}
+
 int mt_rt_mon_enable(void)
 {
 	return mt_rt_mon_enabled;

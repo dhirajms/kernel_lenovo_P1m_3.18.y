@@ -812,6 +812,7 @@ config ARCH_MT6735
 	select MTK_BASE_POWER
 	select KERNEL_MODE_NEON
 	select CRYPTO_AES_ARM32_CE
+	select CRYPTO_SHA2_ARM_CE
 	select ARM_ERRATA_836870
 	select MTK_IRQ_NEW_DESIGN
 	select MTK_IRQ_NEW_DESIGN_DEBUG
@@ -846,6 +847,7 @@ config ARCH_MT6735M
 	select MTK_BASE_POWER
 	select KERNEL_MODE_NEON
 	select CRYPTO_AES_ARM32_CE
+	select CRYPTO_SHA2_ARM_CE
 	select ARM_ERRATA_836870
 	select MTK_IRQ_NEW_DESIGN
 	select MTK_IRQ_NEW_DESIGN_DEBUG
@@ -873,7 +875,7 @@ config ARCH_MT6753
 	select MTK_SYSTRACKER
 	select MTK_SYS_CIRQ
 	select MTK_EIC
-	select MTK_IRQ
+	select MTK_GIC
 	select ARM_HAS_SG_CHAIN
 	select PINCTRL
 	select PINCTRL_MT6735
@@ -882,8 +884,11 @@ config ARCH_MT6753
 	select ARM_MT6735_CPUIDLE
 	select KERNEL_MODE_NEON
 	select CRYPTO_AES_ARM32_CE
+	select CRYPTO_SHA2_ARM_CE
 	select MTK_BASE_POWER
 	select ARM_ERRATA_836870
+	select MTK_IRQ_NEW_DESIGN
+	select MTK_IRQ_NEW_DESIGN_DEBUG
 	select MTK_POWER_GS
 	select MTK_CPU_STRESS
 	help
@@ -953,6 +958,7 @@ config ARCH_MT6755
 	select PINCTRL
 	select KERNEL_MODE_NEON
 	select CRYPTO_AES_ARM32_CE
+	select CRYPTO_SHA2_ARM_CE
 	select MTK_BASE_POWER
 	select ARM_HAS_SG_CHAIN
 	select COMMON_CLK if !MTK_CLKMGR
@@ -2436,6 +2442,7 @@ source "arch/arm/Kconfig.debug"
 source "security/Kconfig"
 
 source "crypto/Kconfig"
+source "arch/arm/crypto/Kconfig"
 
 source "lib/Kconfig"
 

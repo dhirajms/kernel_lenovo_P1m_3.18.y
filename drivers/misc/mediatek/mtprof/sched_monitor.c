@@ -1,3 +1,5 @@
+#define DEBUG 1
+
 #include <linux/proc_fs.h>
 #include <linux/sched.h>
 #include <linux/kallsyms.h>
@@ -18,12 +20,13 @@
 #include "mt_sched_mon.h"
 #include "internal.h"
 
-#define WARN_ISR_DUR     3000000
-#define WARN_SOFTIRQ_DUR 10000000
-#define WARN_TASKLET_DUR 10000000
-#define WARN_HRTIMER_DUR 3000000
-#define WARN_STIMER_DUR  10000000
-#define WARN_BURST_IRQ_DETECT 50000
+static unsigned int WARN_ISR_DUR;
+static unsigned int WARN_SOFTIRQ_DUR;
+static unsigned int WARN_TASKLET_DUR;
+static unsigned int WARN_HRTIMER_DUR;
+static unsigned int WARN_STIMER_DUR;
+static unsigned int WARN_BURST_IRQ_DETECT;
+static unsigned int WARN_PREEMPT_DUR;
 
 
 enum mt_event_type {
@@ -41,6 +44,8 @@ DEFINE_PER_CPU(struct sched_block_event, hrt_mon);
 DEFINE_PER_CPU(struct sched_block_event, sft_mon);
 DEFINE_PER_CPU(struct sched_stop_event, IRQ_disable_mon);
 DEFINE_PER_CPU(struct sched_stop_event, Preempt_disable_mon);
+DEFINE_PER_CPU(struct sched_lock_event, Raw_spin_lock_mon);
+DEFINE_PER_CPU(struct sched_lock_event, rq_lock_mon);
 DEFINE_PER_CPU(int, mt_timer_irq);
 
 /* TIMER debug */
@@ -59,6 +64,7 @@ DEFINE_PER_CPU(int, MT_trace_in_sched);
 DEFINE_PER_CPU(int, MT_trace_in_resume_console);
 
 #define MAX_STACK_TRACE_DEPTH   32
+#define TIME_1MS 1000000
 
 static DEFINE_MUTEX(mt_sched_mon_lock);
 
@@ -71,6 +77,43 @@ static DEFINE_MUTEX(mt_sched_mon_lock);
 /* //////////////////////////////////////////////////////// */
 /* --------------------------------------------------- */
 /* Real work */
+#if defined(CONFIG_MT_SCHED_MONITOR) || defined(CONFIG_PREEMPT_MONITOR)
+static const char *task_name(void *task)
+{
+	struct task_struct *p = NULL;
+
+	p = task;
+	if (p)
+		return p->comm;
+	return NULL;
+}
+
+static void sched_monitor_aee(struct sched_block_event *b)
+{
+#ifdef CONFIG_MT_SCHED_MON_DEFAULT_ENABLE
+	char aee_str[60];
+	unsigned long long t_dur;
+
+	t_dur = b->last_te - b->last_ts;
+	switch (b->type) {
+	case evt_ISR:
+		snprintf(aee_str, 60, "SCHED MONITOR : ISR DURATION WARN");
+		aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DUMMY_DUMP | DB_OPT_FTRACE,
+			aee_str, "ISR DURATION WARN: IRQ[%d:%s] dur:%llu ns",
+			(int)b->last_event, isr_name(b->last_event), t_dur);
+		break;
+	case evt_SOFTIRQ:
+		snprintf(aee_str, 60, "SCHED MONITOR : SOFTIRQ DURATION WARN");
+		aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DUMMY_DUMP | DB_OPT_FTRACE,
+			aee_str, "SOFTIRQ DURATION WARN: SoftIRQ:%d dur:%llu ns",
+			(int)b->last_event, t_dur);
+		break;
+	}
+#else
+	return;
+#endif
+}
+#endif
 #ifdef CONFIG_MT_SCHED_MONITOR
 static void event_duration_check(struct sched_block_event *b)
 {
@@ -84,6 +127,8 @@ static void event_duration_check(struct sched_block_event *b)
 			    ("[ISR DURATION WARN] IRQ[%d:%s], dur:%llu ns > %d ms,(s:%llu,e:%llu)\n",
 			     (int)b->last_event, isr_name(b->last_event), t_dur,
 			     WARN_ISR_DUR / 1000000, b->last_ts, b->last_te);
+			if (unlikely(__raw_get_cpu_var(mtsched_mon_enabled) & 0x1))
+				sched_monitor_aee(b);
 		}
 		if (b->preempt_count != preempt_count())
 			pr_err("[ISR WARN]IRQ[%d:%s], Unbalanced Preempt Count:0x%x! Should be 0x%x\n",
@@ -106,6 +151,10 @@ static void event_duration_check(struct sched_block_event *b)
 				     b_isr->last_te - b_isr->last_ts, b_isr->last_ts,
 				     b_isr->last_te);
 			}
+			if (unlikely(__raw_get_cpu_var(mtsched_mon_enabled) & 0x1)
+				&& (b->last_event != RCU_SOFTIRQ))
+				sched_monitor_aee(b);
+
 		}
 		if (b->preempt_count != preempt_count())
 			pr_err("[SOFTIRQ WARN] SoftIRQ:%d, Unbalanced Preempt Count:0x%x! Should be 0x%x\n",
@@ -133,12 +182,22 @@ static void event_duration_check(struct sched_block_event *b)
 				 (void *)b->last_event, preempt_count(), b->preempt_count);
 		break;
 	case evt_HRTIMER:
-		if (t_dur > WARN_HRTIMER_DUR) {
-			pr_err
+			if (t_dur > WARN_HRTIMER_DUR) {
+				struct sched_lock_event *lock_e;
+
+				lock_e = &__raw_get_cpu_var(rq_lock_mon);
+				pr_err
 			    ("[HRTIMER DURATION WARN] HRTIMER:%pS, dur:%llu ns > %d ms,(s:%llu,e:%llu)\n",
-			     (void *)b->last_event, t_dur, WARN_HRTIMER_DUR / 1000000, b->last_ts,
-			     b->last_te);
-		}
+			     (void *)b->last_event, t_dur, WARN_HRTIMER_DUR / 1000000,
+			     b->last_ts, b->last_te);
+				if (lock_e->lock_owner && lock_e->lock_ts > b->last_ts
+					&& lock_e->lock_dur > TIME_1MS) {
+					pr_err
+					("[HRTIMER WARN]get rq->lock, last owner:%s dur: %llu ns(s:%llu,e:%llu)\n",
+					task_name((void *)lock_e->lock_owner), lock_e->lock_dur,
+					usec_high(lock_e->lock_ts), usec_high(lock_e->lock_te));
+				}
+			}
 			if (b->preempt_count != preempt_count())
 				pr_err("[HRTIMER WARN] HRTIMER:%pS, Unbalanced Preempt Count:0x%x! Should be 0x%x\n",
 		     (void *)b->last_event, preempt_count(), b->preempt_count);
@@ -301,6 +360,36 @@ void mt_trace_hrt_end(void *func)
 	event_duration_check(b);
 }
 
+void mt_trace_rqlock_start(raw_spinlock_t *lock)
+{
+	struct sched_lock_event *lock_e;
+	struct task_struct *owner = NULL;
+
+#ifdef CONFIG_DEBUG_SPINLOCK
+	if (lock->owner && lock->owner != SPINLOCK_OWNER_INIT)
+		owner = lock->owner;
+#endif
+	lock_e = &__raw_get_cpu_var(rq_lock_mon);
+
+	lock_e->lock_ts = sched_clock();
+	lock_e->lock_owner = (unsigned long)owner;
+}
+
+void mt_trace_rqlock_end(raw_spinlock_t *lock)
+{
+	struct sched_lock_event *lock_e;
+	struct task_struct *owner = NULL;
+
+#ifdef CONFIG_DEBUG_SPINLOCK
+	if (lock->owner && lock->owner != SPINLOCK_OWNER_INIT)
+		owner = lock->owner;
+#endif
+	lock_e = &__raw_get_cpu_var(rq_lock_mon);
+
+	lock_e->lock_te = sched_clock();
+	lock_e->lock_dur = lock_e->lock_te - lock_e->lock_ts;
+}
+
 /* SoftTimer monitor */
 void mt_trace_sft_start(void *func)
 {
@@ -328,37 +417,143 @@ void mt_trace_sft_end(void *func)
 	b->cur_ts = 0;
 	event_duration_check(b);
 }
-
+#endif
+#ifdef CONFIG_PREEMPT_MONITOR
 /* Preempt off monitor */
 void MT_trace_preempt_off(void)
 {
 	struct sched_stop_event *e;
+	int cpu = smp_processor_id();
+	struct rq *rq = cpu_rq(cpu);
+	struct task_struct *curr = rq->curr;
 
-	e = &__raw_get_cpu_var(Preempt_disable_mon);
-
-	e->cur_ts = sched_clock();
+	if (unlikely(__raw_get_cpu_var(mtsched_mon_enabled) & 0x1)) {
+		if (strncmp(curr->comm, "swapper", 7)
+			&& strncmp(curr->comm, "migration", 9)
+			&& !in_interrupt()) {
+			e = &__raw_get_cpu_var(Preempt_disable_mon);
+			e->cur_ts = sched_clock();
+		}
+	}
 }
 
 void MT_trace_preempt_on(void)
 {
 	struct sched_stop_event *e;
+	unsigned long long t_dur = 0;
+	int cpu = smp_processor_id();
+	struct rq *rq = cpu_rq(cpu);
+	struct task_struct *curr = rq->curr;
 
-	e = &__raw_get_cpu_var(Preempt_disable_mon);
-	e->last_ts = e->cur_ts;
-	e->cur_ts = 0;
-	e->last_te = sched_clock();
-
+	if (unlikely(__raw_get_cpu_var(mtsched_mon_enabled) & 0x1)) {
+		if (strncmp(curr->comm, "swapper", 7)
+			&& strncmp(curr->comm, "migration", 9)
+			&& !in_interrupt()) {
+			e = &__raw_get_cpu_var(Preempt_disable_mon);
+			e->last_ts = e->cur_ts;
+			e->last_te = sched_clock();
+			t_dur = e->last_te - e->last_ts;
+			if (t_dur != e->last_te)
+				curr->preempt_dur = t_dur;
+		}
+	}
 }
 
+extern void MT_trace_check_preempt_dur(void)
+{
+		struct sched_stop_event *e;
+		struct sched_block_event *b;
+		unsigned long long t_dur = 0;
+		unsigned long long t_dur_tmp = 0;
+
+		if (unlikely(__raw_get_cpu_var(mtsched_mon_enabled) & 0x1)) {
+			b = &__raw_get_cpu_var(ISR_mon);
+			e = &__raw_get_cpu_var(Preempt_disable_mon);
+			t_dur = current->preempt_dur;
+
+			if (t_dur > WARN_PREEMPT_DUR && e->last_ts > 0 && e->last_te > 0) {
+				pr_err("[PREEMPT DURATION WARN]dur:%llu ns (s:%llu,e:%llu),lock_dur:%llu owenr:%s lock:%pS\n",
+				  t_dur, usec_high(e->last_ts), usec_high(e->last_te),
+				  e->lock_dur, task_name((void *)e->lock_owner), e->lock);
+
+			if (b->last_ts > e->last_ts && b->last_te <	e->last_te) {
+				t_dur_tmp = b->last_te - b->cur_ts;
+				pr_err("[PREEMPT DURATION WARN] IRQ[%d:%s] dur %llu (s:%llu,e:%llu)\n",
+					(int)b->last_event, isr_name(b->last_event), t_dur_tmp,
+					usec_high(b->last_ts), usec_high(b->last_te));
+			}
+
+#ifdef CONFIG_MT_SCHED_MON_DEFAULT_ENABLE
+			if (oops_in_progress == 0)
+					aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DUMMY_DUMP | DB_OPT_FTRACE,
+						"SCHED MONITOR : PREEMPT DURATION WARN",
+						"PREEMPT DURATION WARN dur:%llu ns", t_dur);
+#endif
+			}
+			current->preempt_dur = 0;
+			e->cur_ts = 0;
+			e->last_te = 0;
+			e->last_ts = 0;
+			e->lock_dur = 0;
+		}
+}
+#ifdef CONFIG_DEBUG_SPINLOCK
+void MT_trace_raw_spin_lock_s(raw_spinlock_t *lock)
+{
+	struct sched_lock_event *lock_e;
+	struct sched_stop_event *e;
+	unsigned long long curr = 0;
+	struct task_struct *owner = NULL;
+
+	if (lock->owner && lock->owner != SPINLOCK_OWNER_INIT)
+			owner = lock->owner;
+
+	if (unlikely(__raw_get_cpu_var(mtsched_mon_enabled) & 0x1)) {
+		curr = sched_clock();
+		lock_e = &__raw_get_cpu_var(Raw_spin_lock_mon);
+		e = &__raw_get_cpu_var(Preempt_disable_mon);
+		if (e->cur_ts && (curr > e->cur_ts)) {
+			lock_e->lock_ts = curr;
+			lock_e->lock_owner = (unsigned long)owner;
+		}
+	}
+}
+
+void MT_trace_raw_spin_lock_e(raw_spinlock_t *lock)
+{
+	struct sched_lock_event *lock_e;
+	struct sched_stop_event *e;
+	struct task_struct *owner = NULL;
+
+	if (lock->owner && lock->owner != SPINLOCK_OWNER_INIT)
+		owner = lock->owner;
+
+	if (unlikely(__raw_get_cpu_var(mtsched_mon_enabled) & 0x1)) {
+		lock_e = &__raw_get_cpu_var(Raw_spin_lock_mon);
+		e = &__raw_get_cpu_var(Preempt_disable_mon);
+		if (e->cur_ts && !e->last_te) {
+			lock_e->lock_te = sched_clock();
+			lock_e->lock_dur = lock_e->lock_te - lock_e->lock_ts;
+			if (lock_e->lock_dur > WARN_PREEMPT_DUR) {
+				e->lock_dur = lock_e->lock_dur;
+				e->lock_owner = lock_e->lock_owner;
+				e->lock = lock;
+			}
+		}
+	}
+}
+#endif /*CONFIG_DEBUG_SPINLOCK*/
 /* IRQ off monitor */
 void MT_trace_irq_off(void)
 {
 	struct sched_stop_event *e;
+#ifdef CONFIG_MT_SCHED_MONITOR
 	struct stack_trace *trace;
+#endif
 
 	e = &__raw_get_cpu_var(IRQ_disable_mon);
-
 	e->cur_ts = sched_clock();
+#ifdef CONFIG_MT_SCHED_MONITOR
 	/*save timestap */
 	__raw_get_cpu_var(TS_irq_off) = sched_clock();
 	trace = &__raw_get_cpu_var(MT_stack_trace);
@@ -367,8 +562,7 @@ void MT_trace_irq_off(void)
 	trace->max_entries = MAX_STACK_TRACE_DEPTH;	/* 32 */
 	trace->skip = 0;
 	save_stack_trace_tsk(current, trace);
-
-
+#endif
 }
 
 void MT_trace_irq_on(void)
@@ -381,127 +575,68 @@ void MT_trace_irq_on(void)
 	e->last_te = sched_clock();
 
 }
+#endif /*CONFIG_PREEMPT_MONITOR*/
 
+#ifdef CONFIG_MT_SCHED_MONITOR
 #include <linux/irqnr.h>
 #include <linux/kernel_stat.h>
 #include <asm/hardirq.h>
 
-int mt_irq_count[NR_CPUS][MAX_NR_IRQS];
-#ifdef CONFIG_SMP
-int mt_local_irq_count[NR_CPUS][NR_IPI];
-#endif
-unsigned long long mt_save_irq_count_time;
+DEFINE_PER_CPU(struct mt_irq_count, irq_count_mon);
+DEFINE_PER_CPU(struct mt_local_irq_count, ipi_count_mon);
+DEFINE_PER_CPU(unsigned long long, save_irq_count_time);
+
+#define TIME_200MS  200000000
 
 DEFINE_SPINLOCK(mt_irq_count_lock);
-void mt_save_irq_counts(void)
+void mt_save_irq_counts(int action)
 {
-	int irq, cpu, count;
+	int irq, cpu, count, irq_num;
 	unsigned long flags;
 	unsigned long long t_diff, t_avg;
 
-	/* do not refresh data in 20ms */
-	if (sched_clock() - mt_save_irq_count_time < 20000000)
+	/* do not refresh data in 200ms */
+	if (action == SCHED_TICK &&
+		(sched_clock() - __raw_get_cpu_var(save_irq_count_time) < TIME_200MS))
 		return;
 
 	spin_lock_irqsave(&mt_irq_count_lock, flags);
 
-	t_diff = sched_clock() - mt_save_irq_count_time;
+	cpu = smp_processor_id();
 
-	if (smp_processor_id() != 0) {	/* only record by CPU#0 */
-		spin_unlock_irqrestore(&mt_irq_count_lock, flags);
-		return;
-	}
-	mt_save_irq_count_time = sched_clock();
-	for (cpu = 0; cpu < num_possible_cpus(); cpu++) {
-		for (irq = 0; irq < nr_irqs && irq < MAX_NR_IRQS; irq++) {
-			count = kstat_irqs_cpu(irq, cpu) - mt_irq_count[cpu][irq];
-			if (count != 0) {
-				t_avg = t_diff;
-				do_div(t_avg, count);
-				if (t_avg < WARN_BURST_IRQ_DETECT)
-					pr_err("[BURST IRQ DURATION WARN] IRQ[%3d:%14s] +%d ( dur %lld us , avg %lld us)\n",
-						irq, isr_name(irq), count, usec_high(t_diff), usec_high(t_avg));
-			}
-			mt_irq_count[cpu][irq] = kstat_irqs_cpu(irq, cpu);
+	t_diff = sched_clock() - __raw_get_cpu_var(save_irq_count_time);
+	__raw_get_cpu_var(save_irq_count_time) = sched_clock();
+
+	for (irq = 0; irq < nr_irqs && irq < MAX_NR_IRQS; irq++) {
+		irq_num = kstat_irqs_cpu(irq, cpu);
+		count = irq_num - __raw_get_cpu_var(irq_count_mon).irqs[irq];
+		if (count != 0) {
+			t_avg = t_diff;
+			do_div(t_avg, count);
+			if (t_avg < WARN_BURST_IRQ_DETECT)
+				pr_err("[BURST IRQ DURATION WARN] IRQ[%3d:%14s] +%d ( dur %lld us , avg %lld us)\n",
+					irq, isr_name(irq), count, usec_high(t_diff), usec_high(t_avg));
 		}
+		__raw_get_cpu_var(irq_count_mon).irqs[irq] = irq_num;
 	}
 
 #ifdef CONFIG_SMP
-	for (cpu = 0; cpu < num_possible_cpus(); cpu++) {
-		for (irq = 0; irq < NR_IPI; irq++)
-			mt_local_irq_count[cpu][irq] = __get_irq_stat(cpu, ipi_irqs[irq]);
-	}
+	for (irq = 0; irq < NR_IPI; irq++)
+		__raw_get_cpu_var(ipi_count_mon).ipis[irq] = __get_irq_stat(cpu, ipi_irqs[irq]);
 #endif
+
 	spin_unlock_irqrestore(&mt_irq_count_lock, flags);
 }
-#else
-void mt_trace_ISR_start(int id)
-{
-}
-
-void mt_trace_ISR_end(int id)
-{
-}
-
-void mt_trace_SoftIRQ_start(int id)
-{
-}
-
-void mt_trace_SoftIRQ_end(int id)
-{
-}
-
-void mt_trace_tasklet_start(void *func)
-{
-}
-
-void mt_trace_tasklet_end(void *func)
-{
-}
-
-void mt_trace_hrt_start(void *func)
-{
-}
-
-void mt_trace_hrt_end(void *func)
-{
-}
-
-void mt_trace_sft_start(void *func)
-{
-}
-
-void mt_trace_sft_end(void *func)
-{
-}
-
-void MT_trace_irq_on(void)
-{
-}
-
-void MT_trace_irq_off(void)
-{
-}
-
-void MT_trace_preempt_on(void)
-{
-}
-
-void MT_trace_preempt_off(void)
-{
-}
-
-void mt_save_irq_counts(void)
-{
-}
 #endif
+
  /**/
+#define TIME_2MS  2000000
 #define TIME_3MS  3000000
 #define TIME_5MS  5000000
 #define TIME_10MS 10000000
 #define TIME_20MS 20000000
 #define TIME_1S   1000000000
-#define TIME_5S   1000000000
+#define TIME_5S   5000000000
 #define TIME_30S  30000000000
 
 static unsigned long long t_threshold = TIME_5S;
@@ -621,7 +756,7 @@ static ssize_t mt_sched_monitor_write(struct file *filp, const char *ubuf,
 				      size_t cnt, loff_t *data)
 {
 	char buf[64];
-	int val;
+	unsigned long val;
 	int ret;
 
 	if (cnt >= sizeof(buf))
@@ -632,7 +767,7 @@ static ssize_t mt_sched_monitor_write(struct file *filp, const char *ubuf,
 
 	buf[cnt] = 0;
 
-	ret = kstrtoul(buf, 10, (unsigned long *)&val);
+	ret = kstrtoul(buf, 10, &val);
 	if (ret < 0)
 		return ret;
 	/* 0: off, 1:on */
@@ -642,7 +777,7 @@ static ssize_t mt_sched_monitor_write(struct file *filp, const char *ubuf,
 	if (val == 18)		/* 0x12 */
 		mt_dump_irq_off_traces();
 	mt_sched_monitor_switch(val);
-	pr_err(" to %d\n", val);
+	pr_err(" to %lu\n", val);
 	return cnt;
 }
 
@@ -657,6 +792,62 @@ void start_sched_monitor(void)
 void stop_sched_monitor(void)
 {
 }
+
+#define DECLARE_MT_SCHED_MATCH(param, warn_dur)			\
+static ssize_t mt_sched_monitor_##param##_write(			\
+	struct file *filp,					\
+	const char *ubuf,				\
+	size_t cnt, loff_t *data)				\
+{											\
+	char buf[64];							\
+	unsigned long val;								\
+	int ret;								\
+											\
+	if (cnt >= sizeof(buf))					\
+		return -EINVAL;						\
+											\
+	if (copy_from_user(&buf, ubuf, cnt))	\
+		return -EFAULT;						\
+											\
+	buf[cnt] = 0;							\
+	ret = kstrtoul(buf, 10, &val);			\
+	if (ret < 0)							\
+		return ret;							\
+											\
+	warn_dur = val;							\
+											\
+	return cnt;								\
+											\
+}								\
+								\
+static int mt_sched_monitor_##param##_show(			\
+	struct seq_file *m,					\
+	void *v)						\
+{									\
+		SEQ_printf(m,			\
+			   "%d ns\n", warn_dur);	\
+		return 0;				\
+}								\
+static int mt_sched_monitor_##param##_open(struct inode *inode, struct file *file) \
+{ \
+	return single_open(file, mt_sched_monitor_##param##_show, inode->i_private); \
+} \
+\
+static const struct file_operations mt_sched_monitor_##param##_fops = { \
+	.open = mt_sched_monitor_##param##_open, \
+	.write = mt_sched_monitor_##param##_write,\
+	.read = seq_read, \
+	.llseek = seq_lseek, \
+	.release = single_release, \
+}
+
+DECLARE_MT_SCHED_MATCH(ISR_DUR, WARN_ISR_DUR);
+DECLARE_MT_SCHED_MATCH(SOFTIRQ_DUR, WARN_SOFTIRQ_DUR);
+DECLARE_MT_SCHED_MATCH(TASKLET_DUR, WARN_TASKLET_DUR);
+DECLARE_MT_SCHED_MATCH(HRTIMER_DUR, WARN_HRTIMER_DUR);
+DECLARE_MT_SCHED_MATCH(STIMER_DUR, WARN_STIMER_DUR);
+DECLARE_MT_SCHED_MATCH(PREEMPT_DUR, WARN_PREEMPT_DUR);
+DECLARE_MT_SCHED_MATCH(BURST_IRQ, WARN_BURST_IRQ_DETECT);
 
 static int __init init_mtsched_mon(void)
 {
@@ -677,12 +868,41 @@ static int __init init_mtsched_mon(void)
 		per_cpu(sft_mon, cpu).type = evt_STIMER;
 	}
 
+	WARN_ISR_DUR = TIME_3MS;
+	WARN_SOFTIRQ_DUR = TIME_5MS;
+	WARN_TASKLET_DUR = TIME_10MS;
+	WARN_HRTIMER_DUR = TIME_3MS;
+	WARN_STIMER_DUR = TIME_10MS;
+	WARN_BURST_IRQ_DETECT = 25000;
+	WARN_PREEMPT_DUR = TIME_10MS;
+
 	if (!proc_mkdir("mtmon", NULL))
 		return -1;
 	pe = proc_create("mtmon/sched_mon", 0664, NULL, &mt_sched_monitor_fops);
 	if (!pe)
 		return -ENOMEM;
 
+	pe = proc_create("mtmon/sched_mon_duration_ISR", 0664, NULL, &mt_sched_monitor_ISR_DUR_fops);
+	if (!pe)
+		return -ENOMEM;
+	pe = proc_create("mtmon/sched_mon_duration_SOFTIRQ", 0664, NULL, &mt_sched_monitor_SOFTIRQ_DUR_fops);
+	if (!pe)
+		return -ENOMEM;
+	pe = proc_create("mtmon/sched_mon_duration_TASKLET", 0664, NULL, &mt_sched_monitor_TASKLET_DUR_fops);
+	if (!pe)
+		return -ENOMEM;
+	pe = proc_create("mtmon/sched_mon_duration_HRTIMER", 0664, NULL, &mt_sched_monitor_HRTIMER_DUR_fops);
+	if (!pe)
+		return -ENOMEM;
+	pe = proc_create("mtmon/sched_mon_duration_STIMER", 0664, NULL, &mt_sched_monitor_STIMER_DUR_fops);
+	if (!pe)
+		return -ENOMEM;
+	pe = proc_create("mtmon/sched_mon_duration_BURST_IRQ", 0664, NULL, &mt_sched_monitor_BURST_IRQ_fops);
+	if (!pe)
+		return -ENOMEM;
+	pe = proc_create("mtmon/sched_mon_duration_PREEMPT", 0664, NULL, &mt_sched_monitor_PREEMPT_DUR_fops);
+	if (!pe)
+		return -ENOMEM;
 #endif
 	return 0;
 }

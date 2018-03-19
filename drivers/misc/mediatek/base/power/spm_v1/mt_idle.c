@@ -83,6 +83,10 @@ static unsigned long rgidle_cnt[NR_CPUS] = {0};
 static bool mt_idle_chk_golden;
 static bool mt_dpidle_chk_golden;
 
+#if defined(CONFIG_MICROTRUST_TEE_SUPPORT)
+extern int is_teei_ready(void);
+#endif
+
 #define INVALID_GRP_ID(grp) (grp < 0 || grp >= NR_GRPS)
 
 
@@ -137,11 +141,6 @@ void __attribute__((weak)) mtkts_pa_cancel_thermal_timer(void)
 
 }
 
-void __attribute__((weak)) mtkts_allts_cancel_thermal_timer(void)
-{
-
-}
-
 void __attribute__((weak)) mtkts_wmt_cancel_thermal_timer(void)
 {
 
@@ -172,12 +171,57 @@ void __attribute__((weak)) mtkts_pa_start_thermal_timer(void)
 
 }
 
-void __attribute__((weak)) mtkts_allts_start_thermal_timer(void)
+void __attribute__((weak)) mtkts_wmt_start_thermal_timer(void)
 {
 
 }
 
-void __attribute__((weak)) mtkts_wmt_start_thermal_timer(void)
+void __attribute__((weak)) mtkts_allts_cancel_ts1_timer(void)
+{
+
+}
+
+void __attribute__((weak)) mtkts_allts_cancel_ts2_timer(void)
+{
+
+}
+
+void __attribute__((weak)) mtkts_allts_cancel_ts3_timer(void)
+{
+
+}
+
+void __attribute__((weak)) mtkts_allts_cancel_ts4_timer(void)
+{
+
+}
+
+void __attribute__((weak)) mtkts_allts_cancel_ts5_timer(void)
+{
+
+}
+
+void __attribute__((weak)) mtkts_allts_start_ts1_timer(void)
+{
+
+}
+
+void __attribute__((weak)) mtkts_allts_start_ts2_timer(void)
+{
+
+}
+
+void __attribute__((weak)) mtkts_allts_start_ts3_timer(void)
+{
+
+}
+
+void __attribute__((weak)) mtkts_allts_start_ts4_timer(void)
+{
+
+}
+
+void __attribute__((weak)) mtkts_allts_start_ts5_timer(void)
 {
 
 }
@@ -254,7 +298,11 @@ enum {
 /* Idle handler on/off */
 static int idle_switch[NR_TYPES] = {
 	1,  /* dpidle switch */
+#if defined(CONFIG_MTK_DISABLE_SODI)
+	0,  /* soidle switch */
+#else
 	1,  /* soidle switch */
+#endif
 	1,  /* slidle switch */
 	1,  /* rgidle switch */
 };
@@ -520,6 +568,7 @@ static unsigned long    soidle_block_cnt[NR_CPUS][NR_REASONS] = { {0} };
 static unsigned long long soidle_block_prev_time;
 static bool             soidle_by_pass_cg;
 static bool             soidle_by_pass_pg;
+static int				sodi_by_uptime_count;
 
 /* DeepIdle */
 static unsigned int     dpidle_block_mask[NR_GRPS] = {0x0};
@@ -573,6 +622,7 @@ static void __iomem *cksys_base;
 #define MFG_CG_CON          MFG_REG(0)
 #define DISP_CG_CON0        MM_REG(0x100)
 #define DISP_CG_CON1        MM_REG(0x110)
+#define DISP_CG_DUMMY       MM_REG(0x894)
 #define IMG_CG_CON          IMG_REG(0x0000)
 #define VDEC_CKEN_SET       VDEC_REG(0x0000)
 #define LARB_CKEN_SET       VDEC_REG(0x0008)
@@ -585,6 +635,8 @@ static void __iomem *cksys_base;
 #define ISP_PWR_STA_MASK        BIT(5)
 #define VDE_PWR_STA_MASK        BIT(7)
 #define VEN_PWR_STA_MASK        BIT(8)
+
+#define INFRA_AUDIO_PDN_STA_MASK	BIT(5)
 
 enum subsys_id {
 	SYS_VDE,
@@ -624,7 +676,11 @@ static void get_all_clock_state(u32 clks[NR_GRPS])
 	clks[CG_PERI] = ~idle_readl(PERI_PDN0_STA); /* PERI */
 
 	if (sys_is_on(SYS_DIS)) {
+#if defined(CONFIG_ARCH_MT6753)
+		clks[CG_DISP0] = ~idle_readl(DISP_CG_DUMMY); /* DUMMY */
+#else
 		clks[CG_DISP0] = ~idle_readl(DISP_CG_CON0); /* DISP0 */
+#endif
 		clks[CG_DISP1] = ~idle_readl(DISP_CG_CON1); /* DISP1 */
 	}
 
@@ -634,7 +690,8 @@ static void get_all_clock_state(u32 clks[NR_GRPS])
 	if (sys_is_on(SYS_MFG))
 		clks[CG_MFG] = ~idle_readl(MFG_CG_CON); /* MFG */
 
-	clks[CG_AUDIO] = ~idle_readl(AUDIO_TOP_CON0); /* AUDIO */
+	if (clks[CG_INFRA] & INFRA_AUDIO_PDN_STA_MASK) /* check if infra_audio is on */
+		clks[CG_AUDIO] = ~idle_readl(AUDIO_TOP_CON0); /* AUDIO */
 
 	if (sys_is_on(SYS_VDE)) {
 		clks[CG_VDEC0] = idle_readl(VDEC_CKEN_SET); /* VDEC0 */
@@ -859,7 +916,7 @@ void idle_unlock_spm(enum idle_lock_spm_id id)
  * SODI part
  */
 static DEFINE_MUTEX(soidle_locked);
-
+#if !defined(CONFIG_ARCH_MT6580)
 static void enable_soidle_by_mask(int grp, unsigned int mask)
 {
 	mutex_lock(&soidle_locked);
@@ -873,26 +930,57 @@ static void disable_soidle_by_mask(int grp, unsigned int mask)
 	soidle_condition_mask[grp] |= mask;
 	mutex_unlock(&soidle_locked);
 }
-
+#endif
 void enable_soidle_by_bit(int id)
 {
+#if !defined(CONFIG_ARCH_MT6580)
 	int grp = id / 32;
 	unsigned int mask = 1U << (id % 32);
 
 	BUG_ON(INVALID_GRP_ID(grp));
 	enable_soidle_by_mask(grp, mask);
+#else
+	unsigned int grp = clk_id_to_grp_id(id);
+	unsigned int mask = clk_id_to_mask(id);
+
+	if ((grp == NR_GRPS) || (mask == NR_GRPS))
+		idle_warn("[%s]wrong clock id\n", __func__);
+	else
+		soidle_condition_mask[grp] &= ~mask;
+#endif
 }
 EXPORT_SYMBOL(enable_soidle_by_bit);
 
 void disable_soidle_by_bit(int id)
 {
+#if !defined(CONFIG_ARCH_MT6580)
 	int grp = id / 32;
 	unsigned int mask = 1U << (id % 32);
 
 	BUG_ON(INVALID_GRP_ID(grp));
 	disable_soidle_by_mask(grp, mask);
+#else
+	unsigned int grp = clk_id_to_grp_id(id);
+	unsigned int mask = clk_id_to_mask(id);
+
+	if ((grp == NR_GRPS) || (mask == NR_GRPS))
+		idle_warn("[%s]wrong clock id\n", __func__);
+	else
+		soidle_condition_mask[grp] |= mask;
+#endif
 }
 EXPORT_SYMBOL(disable_soidle_by_bit);
+
+#if !defined(CONFIG_ARCH_MT6580)
+void defeature_soidle_by_display(void)
+{
+    if (idle_switch[IDLE_TYPE_SO] != 0)
+    {
+        idle_switch[IDLE_TYPE_SO] = 0;
+    }
+}
+EXPORT_SYMBOL(defeature_soidle_by_display);
+#endif
 
 static bool soidle_can_enter(int cpu)
 {
@@ -912,6 +1000,13 @@ static bool soidle_can_enter(int cpu)
 		reason = BY_VTG;
 		goto out;
 	}
+
+#if defined(CONFIG_MICROTRUST_TEE_SUPPORT)
+	if (!is_teei_ready()) {
+		reason = BY_OTH;
+		goto out;
+	}
+#endif
 
 	/* decide when to enable SODI by display driver */
 	if (spm_get_sodi_en() == 0) {
@@ -946,6 +1041,22 @@ static bool soidle_can_enter(int cpu)
 		goto out;
 	}
 #endif
+
+	if (sodi_by_uptime_count != -1) {
+		struct timespec uptime;
+		unsigned long val;
+
+		get_monotonic_boottime(&uptime);
+		val = (unsigned long)uptime.tv_sec;
+		if (val <= 20) {
+		    sodi_by_uptime_count++;
+		    reason = BY_OTH;
+		    goto out;
+		} else {
+		    idle_warn("SODI: blocking by uptime count = %d\n", sodi_by_uptime_count);
+		    sodi_by_uptime_count = -1;
+		}
+	}
 
 out:
 	if (reason < NR_REASONS) {
@@ -1040,7 +1151,7 @@ void soidle_after_wfi(int cpu)
  * deep idle part
  */
 static DEFINE_MUTEX(dpidle_locked);
-
+#if !defined(CONFIG_ARCH_MT6580)
 static void enable_dpidle_by_mask(int grp, unsigned int mask)
 {
 	mutex_lock(&dpidle_locked);
@@ -1054,24 +1165,44 @@ static void disable_dpidle_by_mask(int grp, unsigned int mask)
 	dpidle_condition_mask[grp] |= mask;
 	mutex_unlock(&dpidle_locked);
 }
-
+#endif
 void enable_dpidle_by_bit(int id)
 {
+#if !defined(CONFIG_ARCH_MT6580)
 	int grp = id / 32;
 	unsigned int mask = 1U << (id % 32);
 
 	BUG_ON(INVALID_GRP_ID(grp));
 	enable_dpidle_by_mask(grp, mask);
+#else
+	unsigned int grp = clk_id_to_grp_id(id);
+	unsigned int mask = clk_id_to_mask(id);
+
+	if ((grp == NR_GRPS) || (mask == NR_GRPS))
+		idle_warn("[%s]wrong clock id\n", __func__);
+	else
+		dpidle_condition_mask[grp] &= ~mask;
+#endif
 }
 EXPORT_SYMBOL(enable_dpidle_by_bit);
 
 void disable_dpidle_by_bit(int id)
 {
+#if !defined(CONFIG_ARCH_MT6580)
 	int grp = id / 32;
 	unsigned int mask = 1U << (id % 32);
 
 	BUG_ON(INVALID_GRP_ID(grp));
 	disable_dpidle_by_mask(grp, mask);
+#else
+	unsigned int grp = clk_id_to_grp_id(id);
+	unsigned int mask = clk_id_to_mask(id);
+
+	if ((grp == NR_GRPS) || (mask == NR_GRPS))
+		idle_warn("[%s]wrong clock id\n", __func__);
+	else
+		dpidle_condition_mask[grp] |= mask;
+#endif
 }
 EXPORT_SYMBOL(disable_dpidle_by_bit);
 
@@ -1094,6 +1225,13 @@ static bool dpidle_can_enter(void)
 		reason = BY_VTG;
 		goto out;
 	}
+
+#if defined(CONFIG_MICROTRUST_TEE_SUPPORT)
+	if (!is_teei_ready()) {
+		reason = BY_OTH;
+		goto out;
+	}
+#endif
 
 	if (dpidle_by_pass_cg == 0) {
 		memset(dpidle_block_mask, 0, NR_GRPS * sizeof(unsigned int));
@@ -1365,8 +1503,13 @@ static inline void soidle_pre_handler(void)
 	mtkts_pmic_cancel_thermal_timer();
 	mtkts_battery_cancel_thermal_timer();
 	mtkts_pa_cancel_thermal_timer();
-	mtkts_allts_cancel_thermal_timer();
 	mtkts_wmt_cancel_thermal_timer();
+
+	mtkts_allts_cancel_ts1_timer();
+	mtkts_allts_cancel_ts2_timer();
+	mtkts_allts_cancel_ts3_timer();
+	mtkts_allts_cancel_ts4_timer();
+	mtkts_allts_cancel_ts5_timer();
 #endif
 }
 
@@ -1382,8 +1525,13 @@ static inline void soidle_post_handler(void)
 	mtkts_pmic_start_thermal_timer();
 	mtkts_battery_start_thermal_timer();
 	mtkts_pa_start_thermal_timer();
-	mtkts_allts_start_thermal_timer();
 	mtkts_wmt_start_thermal_timer();
+
+	mtkts_allts_start_ts1_timer();
+	mtkts_allts_start_ts2_timer();
+	mtkts_allts_start_ts3_timer();
+	mtkts_allts_start_ts4_timer();
+	mtkts_allts_start_ts5_timer();
 #endif
 }
 
@@ -1406,8 +1554,13 @@ static inline void dpidle_pre_handler(void)
 	mtkts_pmic_cancel_thermal_timer();
 	mtkts_battery_cancel_thermal_timer();
 	mtkts_pa_cancel_thermal_timer();
-	mtkts_allts_cancel_thermal_timer();
 	mtkts_wmt_cancel_thermal_timer();
+
+	mtkts_allts_cancel_ts1_timer();
+	mtkts_allts_cancel_ts2_timer();
+	mtkts_allts_cancel_ts3_timer();
+	mtkts_allts_cancel_ts4_timer();
+	mtkts_allts_cancel_ts5_timer();
 #endif
 }
 static inline void dpidle_post_handler(void)
@@ -1421,8 +1574,13 @@ static inline void dpidle_post_handler(void)
 	mtkts_pmic_start_thermal_timer();
 	mtkts_battery_start_thermal_timer();
 	mtkts_pa_start_thermal_timer();
-	mtkts_allts_start_thermal_timer();
 	mtkts_wmt_start_thermal_timer();
+
+	mtkts_allts_start_ts1_timer();
+	mtkts_allts_start_ts2_timer();
+	mtkts_allts_start_ts3_timer();
+	mtkts_allts_start_ts4_timer();
+	mtkts_allts_start_ts5_timer();
 #endif
 }
 #ifdef SPM_DEEPIDLE_PROFILE_TIME

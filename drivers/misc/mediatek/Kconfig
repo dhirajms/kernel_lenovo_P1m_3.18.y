@@ -39,8 +39,6 @@ config MTK_LM_MODE
 	help
 	  Large Memory mode support for supporting more than 4GB DRAM access
 
-endif
-
 config MTK_MEM
 	bool "Support platform memory information"
 	default y
@@ -49,6 +47,25 @@ config MTK_MEM
 	  for mediatek platform drivers. It also provides
 	  some debug features. Please see
 	  MTK_MEMCFG.
+
+config MTK_MEMCFG
+	bool "Support enhanced memory configurations"
+	depends on MTK_MEM
+	default n
+	help
+	  MTK_MEMCFG provides debug features such as
+	  platform memory layout information and
+	  fragmentation test tools. The features
+	  cost additional memory.
+
+config MTK_MEMORY_LOWPOWER
+	bool "Support Mediatek memory lowpower technology"
+	default n
+	help
+	  Mediatek DRAM low power technology.
+	  It tries to safe DRAM power by switching
+	  different DRAM mode dynamically. It's a
+	  platform-dependent feature.
 
 config MTK_DCS
 	bool "Support Mediatek DDRPHY DCS mechanism"
@@ -102,6 +119,22 @@ config CUSTOM_KERNEL_IMGSENSOR
 	  CUSTOM_KERNEL_MAIN_BACKUP_IMGSENSOR, CUSTOM_KERNEL_SUB_IMGSENSOR,
 	  and CUSTOM_KERNEL_SUB_BACKUP_IMGSENSOR
 
+config CUSTOM_KERNEL_CAM_CAL_DRV
+	string "CUSTOM_KERNEL_CAM_CAL_DRV"
+	help
+	  Kernel space camera calibration driver. Define  project used cam_cal
+	  driver .
+
+config MTK_HIBERNATION
+	bool "MTK Hibernation support (IPOH)"
+	depends on TOI
+	default y
+	help
+	  MTK Hibernation is the improved hibernation driver in kernel for IPOH.
+	  This depends on TuxOnIce implementation of kernel hibernation
+	  architecture to improve mediatek platform hibernation flow.
+	  This option is required when IPOH is enabled.
+
 config MT_ENG_BUILD
 	bool "flag for MTK eng/usr build verification"
 	default n
@@ -125,28 +158,80 @@ config MTK_LDVT
 	help
 	  Support LDVT or not
 
+config MTK_LCM_PHYSICAL_ROTATION_HW
+	bool "MTK_LCM_PHYSICAL_ROTATION_HW"
+	default n
+	help
+	  Rotate LCM display for 180 degree using mediatek hardware engine
+	  Enable it when LCM hardware is intalled upside down,
+	  and you need to rotate the display content to adapting.
+
+config MTK_NXP_TFA9897
+	bool "MTK_NXP_TFA9897"
+	default n
+	help
+	  fix sound
+
+config WT_BRIGHTNESS_MAPPING_WITH_LCM
+        tristate "WT_BRIGHTNESS_MAPPING_WITH_LCM"
+        default n
+config WT_LCD_BACKLIGHT_DELAY_100MS
+        tristate "WT_LCD_BACKLIGHT_DELAY_100MS"
+       default n
+#flashlight
+config WT_CUST_TORCH_FLASHLIGHT
+	bool "Wingtech custom torch flashlight"
+	depends on MTK_LEDS
+config WT_BACKLIGHT_DISABLE_WITH_NOLCM	  
+       bool "WT_BACKLIGHT_DISABLE_WITH_NOLCM"
+       default n
+
+config TABLET_PROJECT
+	bool "IS_TABLET_PROJECT"
+	default n
+	help
+	  Is Tablet Project or not
+
 source "drivers/misc/mediatek/gpt/Kconfig"
 source "drivers/misc/mediatek/uart/Kconfig"
+source "drivers/misc/mediatek/irtx/Kconfig"
+source "drivers/misc/mediatek/ir_learning/Kconfig"
+source "drivers/misc/mediatek/irq/Kconfig"
 source "drivers/misc/mediatek/auxadc/Kconfig"
 source "drivers/misc/mediatek/videocodec/Kconfig"
 source "drivers/misc/mediatek/m4u/Kconfig"
+source "drivers/misc/mediatek/i2c/Kconfig"
 source "drivers/misc/mediatek/leds/Kconfig"
 source "drivers/misc/mediatek/vibrator/Kconfig"
 source "drivers/misc/mediatek/jpeg/Kconfig"
 source "drivers/misc/mediatek/power/Kconfig"
 source "drivers/misc/mediatek/pmic_wrap/Kconfig"
+source "drivers/misc/mediatek/partition/Kconfig"
+source "drivers/misc/mediatek/sysenv/Kconfig"
 source "drivers/misc/mediatek/mtprof/Kconfig"
+source "drivers/misc/mediatek/usb20/Kconfig"
+source "drivers/misc/mediatek/usb11/Kconfig"
+source "drivers/misc/mediatek/mu3d/Kconfig"
+source "drivers/misc/mediatek/mu3phy/Kconfig"
+source "drivers/misc/mediatek/gpio/Kconfig"
 source "drivers/misc/mediatek/cmdq/Kconfig"
 source "drivers/misc/mediatek/smi/Kconfig"
 source "drivers/misc/mediatek/base/power/Kconfig"
 source "drivers/misc/mediatek/boot/Kconfig"
 source "drivers/misc/mediatek/boot_reason/Kconfig"
 source "drivers/misc/mediatek/chip/Kconfig"
+source "drivers/misc/mediatek/ccci_util/Kconfig"
+source "drivers/misc/mediatek/ccmni/Kconfig"
+source "drivers/misc/mediatek/dual_ccci/Kconfig"
+source "drivers/misc/mediatek/eccci/Kconfig"
+source "drivers/misc/mediatek/ssw/Kconfig"
+source "drivers/misc/mediatek/devapc/Kconfig"
 source "drivers/misc/mediatek/devinfo/Kconfig"
 source "drivers/misc/mediatek/gpu/Kconfig"
 source "drivers/misc/mediatek/mmp/Kconfig"
 source "drivers/misc/mediatek/lcm/Kconfig"
 source "drivers/misc/mediatek/video/Kconfig"
+source "drivers/misc/mediatek/cqdma/Kconfig"
 source "drivers/misc/mediatek/dramc/Kconfig"
 source "drivers/misc/mediatek/sync/Kconfig"
  
@@ -154,21 +239,52 @@ source "drivers/misc/mediatek/pwm/Kconfig"
 source "drivers/misc/mediatek/accelerometer/Kconfig"
 source "drivers/misc/mediatek/alsps/Kconfig"
 source "drivers/misc/mediatek/gyroscope/Kconfig"
+source "drivers/misc/mediatek/magnetometer/Kconfig"
 source "drivers/misc/mediatek/hwmon/Kconfig"
+source "drivers/misc/mediatek/barometer/Kconfig"
+source "drivers/misc/mediatek/humidity/Kconfig"
+source "drivers/misc/mediatek/activity_sensor/Kconfig"
+source "drivers/misc/mediatek/face_down_sensor/Kconfig"
+source "drivers/misc/mediatek/gamerotationvector/Kconfig"
+source "drivers/misc/mediatek/geomagneticrotationvector/Kconfig"
+source "drivers/misc/mediatek/glance_gesture_sensor/Kconfig"
+source "drivers/misc/mediatek/gravity/Kconfig"
+source "drivers/misc/mediatek/heart_rate_sensor/Kconfig"
+source "drivers/misc/mediatek/in_pocket_sensor/Kconfig"
+source "drivers/misc/mediatek/linearacceleration/Kconfig"
+source "drivers/misc/mediatek/pedometer/Kconfig"
+source "drivers/misc/mediatek/pick_up_sensor/Kconfig"
+source "drivers/misc/mediatek/rotationvector/Kconfig"
+source "drivers/misc/mediatek/shake_sensor/Kconfig"
+source "drivers/misc/mediatek/step_counter/Kconfig"
+source "drivers/misc/mediatek/tilt_detector_sensor/Kconfig"
+source "drivers/misc/mediatek/wake_gesture_sensor/Kconfig"
+source "drivers/misc/mediatek/pdr_sensor/Kconfig"
+source "drivers/misc/mediatek/freefall_sensor/Kconfig"
+source "drivers/misc/mediatek/sensorHub/Kconfig"
+source "drivers/misc/mediatek/gud/Kconfig"
+source "drivers/misc/mediatek/teei/Kconfig"
 source "drivers/misc/mediatek/freqhopping/Kconfig"
 source "drivers/misc/mediatek/cirq/Kconfig"
 source "drivers/misc/mediatek/accdet/Kconfig"
 source "drivers/misc/mediatek/masp/Kconfig"
 source "drivers/misc/mediatek/debug_latch/Kconfig"
+source "drivers/misc/mediatek/watchpoint/Kconfig"
 source "drivers/misc/mediatek/systracker/Kconfig"
 source "drivers/misc/mediatek/ram_console/Kconfig"
+source "drivers/misc/mediatek/xlog/Kconfig"
+source "drivers/misc/mediatek/exm/Kconfig"
  
 source "drivers/misc/mediatek/sched/Kconfig"
 source "drivers/misc/mediatek/dynamic_boost/Kconfig"
 source "drivers/misc/mediatek/trustzone/Kconfig"
+source "drivers/misc/mediatek/fmradio/Kconfig"
 source "drivers/misc/mediatek/imgsensor/Kconfig"
-source "drivers/misc/mediatek/gps/Kconfig"
+source "drivers/misc/mediatek/cam_cal/Kconfig"
+source "drivers/misc/mediatek/multibridge/Kconfig"
+source "drivers/misc/mediatek/btif/Kconfig"
 source "drivers/misc/mediatek/connectivity/Kconfig"
+source "drivers/misc/mediatek/conn_md/Kconfig"
 source "drivers/misc/mediatek/nfc/Kconfig"
 source "drivers/misc/mediatek/lens/Kconfig"
 source "drivers/misc/mediatek/flashlight/Kconfig"
@@ -180,9 +296,22 @@ source "drivers/misc/mediatek/ssusb/Kconfig"
 source "drivers/misc/mediatek/mlog/Kconfig"
 source "drivers/misc/mediatek/emi_bwl/Kconfig"
 source "drivers/misc/mediatek/emi_mpu/Kconfig"
+source "drivers/misc/mediatek/mjc/Kconfig"
 source "drivers/misc/mediatek/emi_mbw/Kconfig"
  
+source "drivers/misc/mediatek/btcvsd/Kconfig"
+source "drivers/misc/mediatek/nand/Kconfig"
+source "drivers/misc/mediatek/dum-char/Kconfig"
+source "drivers/misc/mediatek/ext_disp/Kconfig"
+source "drivers/misc/mediatek/hdmi/Kconfig"
+source "drivers/misc/mediatek/xhci/Kconfig"
+source "drivers/misc/mediatek/power_gs/Kconfig"
 source "drivers/misc/mediatek/ice_debug/Kconfig"
+source "drivers/misc/mediatek/performance/Kconfig"
 source "drivers/misc/mediatek/ext_gic/Kconfig"
+source "drivers/misc/mediatek/scp/Kconfig"
  
+source "drivers/misc/mediatek/rrc/Kconfig"
 source "drivers/misc/mediatek/selinux_warning/Kconfig"
+source "drivers/misc/mediatek/usb_c/Kconfig"
+endif

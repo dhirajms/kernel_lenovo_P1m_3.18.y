@@ -6,6 +6,7 @@
 #if defined(MTK_LCM_DEVICE_TREE_SUPPORT)
 extern LCM_DRIVER lcm_common_drv;
 #else
+extern LCM_DRIVER otm1284a_hd720_dsi_vdo_baolongda_lcm_drv;
 extern LCM_DRIVER otm1282a_hd720_dsi_vdo_60hz_lcm_drv;
 extern LCM_DRIVER otm1282a_hd720_dsi_vdo_lcm_drv;
 extern LCM_DRIVER vvx10f008b00_wuxga_dsi_vdo_lcm_drv;
@@ -92,6 +93,7 @@ extern LCM_DRIVER hx8369a_wvga_dsi_cmd_drv;
 extern LCM_DRIVER hx8369a_wvga_dsi_vdo_drv;
 extern LCM_DRIVER hx8392a_dsi_cmd_lcm_drv;
 extern LCM_DRIVER hx8392a_dsi_cmd_3lane_lcm_drv;
+extern LCM_DRIVER hx8392a_dsi_cmd_3lane_qhd_lcm_drv;
 extern LCM_DRIVER hx8392a_dsi_cmd_wvga_lcm_drv;
 extern LCM_DRIVER hx8392a_dsi_cmd_fwvga_lcm_drv;
 extern LCM_DRIVER hx8392a_dsi_cmd_qhd_lcm_drv;
@@ -150,6 +152,7 @@ extern LCM_DRIVER cpt_claa101fp01_dsi_vdo_8163_lcm_drv;
 extern LCM_DRIVER h070d_18dm_lcm_drv;
 extern LCM_DRIVER hx8394a_hd720_dsi_vdo_tianma_lcm_drv;
 extern LCM_DRIVER hx8394d_hd720_dsi_vdo_tianma_lcm_drv;
+extern LCM_DRIVER ili9881_hd720_dsi_vdo_yassy_lcm_drv;
 extern LCM_DRIVER cpt_clap070wp03xg_sn65dsi83_lcm_drv;
 extern LCM_DRIVER nt35520_hd720_tm_lcm_drv;
 extern LCM_DRIVER nt35520_hd720_boe_lcm_drv;
@@ -234,6 +237,7 @@ extern LCM_DRIVER nt35595_fhd_dsi_cmd_truly_nt50358_extern_lcm_drv;
 extern LCM_DRIVER r69429_wqxga_dsi_vdo_lcm_drv;
 extern LCM_DRIVER hx8394c_wxga_dsi_vdo_lcm_drv;
 extern LCM_DRIVER nt35595_truly_fhd_dsi_vdo_lcm_drv;
+extern LCM_DRIVER b080uan01_2_wuxga_dsi_vdo_lcm_drv;
 #endif
 
 #ifdef BUILD_LK

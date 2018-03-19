@@ -79,12 +79,12 @@ static u32 fb_xres_update;
 static u32 fb_yres_update;
 
 #define MTK_FB_XRESV (ALIGN_TO(MTK_FB_XRES, MTK_FB_ALIGNMENT))
-#define MTK_FB_YRESV (ALIGN_TO(MTK_FB_YRES, MTK_FB_ALIGNMENT) * MTK_FB_PAGES)	/* For page flipping */
+#define MTK_FB_YRESV (MTK_FB_YRES * MTK_FB_PAGES)	/* For page flipping */
 #define MTK_FB_BYPP  ((MTK_FB_BPP + 7) >> 3)
 #define MTK_FB_LINE  (ALIGN_TO(MTK_FB_XRES, MTK_FB_ALIGNMENT) * MTK_FB_BYPP)
-#define MTK_FB_SIZE  (MTK_FB_LINE * ALIGN_TO(MTK_FB_YRES, MTK_FB_ALIGNMENT))
+#define MTK_FB_SIZE  (MTK_FB_LINE * MTK_FB_YRES)
 
-#define MTK_FB_SIZEV (MTK_FB_LINE * ALIGN_TO(MTK_FB_YRES, MTK_FB_ALIGNMENT) * MTK_FB_PAGES)
+#define MTK_FB_SIZEV (MTK_FB_LINE * MTK_FB_YRES * MTK_FB_PAGES)
 
 #define CHECK_RET(expr)			\
 	do {				\
@@ -1756,6 +1756,9 @@ void disp_get_fb_address(unsigned long *fbVirAddr, unsigned long *fbPhysAddr)
 	*fbPhysAddr = (unsigned long)fbdev->fb_pa_base + mtkfb_fbi->var.yoffset * mtkfb_fbi->fix.line_length;
 }
 
+#ifdef CONFIG_WT_BACKLIGHT_DISABLE_WITH_NOLCM
+int lcm_connected = 1;
+#endif
 char *mtkfb_find_lcm_driver(void)
 {
 
@@ -1766,7 +1769,15 @@ char *mtkfb_find_lcm_driver(void)
 	}
 #else
 	{
-		char *p, *q;
+		char *p, *q,*f;
+#ifdef CONFIG_WT_BACKLIGHT_DISABLE_WITH_NOLCM
+        f = strstr(saved_command_line, "lcm_connected=0");
+        	printk("zhengzhou 111111111111\n");
+        if(f != NULL)
+        {               
+            lcm_connected = 0;         
+        }
+#endif
 
 		p = strstr(saved_command_line, "lcm=");
 		/* we can't find lcm string in the command line, the uboot should be old version */
@@ -2258,7 +2269,7 @@ static int mtkfb_probe(struct device *dev)
 
 
 	/* this function will get fb_heap base address to ion for management frame buffer */
-	ion_drv_create_FB_heap(mtkfb_get_fb_base(), mtkfb_get_fb_size());
+	ion_drv_create_FB_heap(mtkfb_get_fb_base(), mtkfb_get_fb_size() - DAL_GetLayerSize());
 	fbdev->state = MTKFB_ACTIVE;
 
 #ifdef FPGA_DEBUG_PAN
@@ -2420,6 +2431,9 @@ static void mtkfb_blank_suspend(void)
 	if (disp_helper_get_stage() != DISP_HELPER_STAGE_NORMAL)
 		return;
 
+#ifdef CONFIG_SINGLE_PANEL_OUTPUT
+	is_early_suspended = true;
+#endif
 	pr_debug("[FB Driver] enter early_suspend\n");
 #ifdef CONFIG_MTK_LEDS
 /* mt65xx_leds_brightness_set(MT65XX_LED_TYPE_LCD, LED_OFF); */
@@ -2455,6 +2469,9 @@ static void mtkfb_blank_resume(void)
 		return;
 
 	pr_debug("[FB Driver] enter late_resume\n");
+#ifdef CONFIG_SINGLE_PANEL_OUTPUT
+	is_early_suspended = false;
+#endif
 
 	ret = primary_display_resume();
 

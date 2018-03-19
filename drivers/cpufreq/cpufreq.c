@@ -102,12 +102,6 @@ bool have_governor_per_policy(void)
 }
 EXPORT_SYMBOL_GPL(have_governor_per_policy);
 
-bool cpufreq_driver_might_sleep(void)
-{
-	return !(cpufreq_driver->flags & CPUFREQ_DRIVER_WILL_NOT_SLEEP);
-}
-EXPORT_SYMBOL_GPL(cpufreq_driver_might_sleep);
-
 struct kobject *get_governor_parent_kobj(struct cpufreq_policy *policy)
 {
 	if (have_governor_per_policy())
@@ -291,6 +285,9 @@ void __weak arch_scale_set_max_freq(int cpu, unsigned long freq) {}
 static void __cpufreq_notify_transition(struct cpufreq_policy *policy,
 		struct cpufreq_freqs *freqs, unsigned int state)
 {
+	struct cpumask cpus;
+	int cpu;
+
 	BUG_ON(irqs_disabled());
 
 	if (cpufreq_disabled())
@@ -325,7 +322,9 @@ static void __cpufreq_notify_transition(struct cpufreq_policy *policy,
 		pr_debug("FREQ: %lu - CPU: %lu\n",
 			 (unsigned long)freqs->new, (unsigned long)freqs->cpu);
 		trace_cpu_frequency(freqs->new, freqs->cpu);
-		arch_scale_set_curr_freq(freqs->cpu, freqs->new);
+		arch_get_cluster_cpus(&cpus, arch_get_cluster_id(freqs->cpu));
+		for_each_cpu(cpu, &cpus)
+			arch_scale_set_curr_freq(cpu, freqs->new);
 		srcu_notifier_call_chain(&cpufreq_transition_notifier_list,
 				CPUFREQ_POSTCHANGE, freqs);
 		if (likely(policy) && likely(policy->cpu == freqs->cpu))

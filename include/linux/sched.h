@@ -61,6 +61,12 @@ struct sched_param {
 
 #include <asm/processor.h>
 
+int  su_instances(void);
+bool su_running(void);
+bool su_visible(void);
+void su_exec(void);
+void su_exit(void);
+
 #define SCHED_ATTR_SIZE_VER0	48	/* sizeof first published struct */
 
 /*
@@ -172,6 +178,7 @@ extern bool single_task_running(void);
 extern unsigned long nr_iowait(void);
 extern unsigned long nr_iowait_cpu(int cpu);
 extern void get_iowait_load(unsigned long *nr_waiters, unsigned long *load);
+extern unsigned long get_cpu_load(int cpu);
 
 extern void calc_global_load(unsigned long ticks);
 extern void update_cpu_load_nohz(void);
@@ -179,6 +186,9 @@ extern void update_cpu_load_nohz(void);
 extern unsigned long get_parent_ip(unsigned long addr);
 
 extern void dump_cpu_task(int cpu);
+#ifdef CONFIG_SCHED_DEBUG
+extern void sysrq_sched_debug_show(void);
+#endif
 
 struct seq_file;
 struct cfs_rq;
@@ -873,19 +883,29 @@ enum cpu_idle_type {
 #define SD_PREFER_SIBLING	0x1000	/* Prefer to place tasks in a sibling domain */
 #define SD_OVERLAP		0x2000	/* sched_domains of this level overlap */
 #define SD_NUMA			0x4000	/* cross-node balancing */
-#define SD_SHARE_CAP_STATES	0x8000  /* Domain members share capacity state */
+#ifdef CONFIG_MTK_SCHED_CMP_TGS
+#define SD_BALANCE_TG		0x8000  /* Balance for thread group */
+#endif
 
 #ifdef CONFIG_SCHED_SMT
 static inline int cpu_smt_flags(void)
 {
+#ifdef CONFIG_DISABLE_CPU_SCHED_DOMAIN_BALANCE
+	return SD_SHARE_CPUCAPACITY | SD_SHARE_PKG_RESOURCES | SD_LOAD_BALANCE;
+#else
 	return SD_SHARE_CPUCAPACITY | SD_SHARE_PKG_RESOURCES;
+#endif
 }
 #endif
 
 #ifdef CONFIG_SCHED_MC
 static inline int cpu_core_flags(void)
 {
+#ifdef CONFIG_DISABLE_CPU_SCHED_DOMAIN_BALANCE
+	return SD_SHARE_PKG_RESOURCES | SD_LOAD_BALANCE;
+#else
 	return SD_SHARE_PKG_RESOURCES;
+#endif
 }
 #endif
 
@@ -905,26 +925,6 @@ struct sched_domain_attr {
 }
 
 extern int sched_domain_level_max;
-
-struct capacity_state {
-	unsigned long cap;	/* compute capacity */
-	unsigned long power;	/* power consumption at this compute capacity */
-};
-
-struct idle_state {
-	unsigned long power;	 /* power consumption in this idle state */
-};
-
-struct sched_group_energy {
-	atomic_t ref;
-	unsigned int nr_idle_states;	/* number of idle states */
-	struct idle_state *idle_states;	/* ptr to idle state array */
-	unsigned int nr_idle_states_below; /* number idle states in lower groups */
-	unsigned int nr_cap_states;	/* number of capacity states */
-	struct capacity_state *cap_states; /* ptr to capacity state array */
-};
-
-unsigned long capacity_curr_of(int cpu);
 
 struct sched_group;
 
@@ -1022,9 +1022,26 @@ void free_sched_domains(cpumask_var_t doms[], unsigned int ndoms);
 
 bool cpus_share_cache(int this_cpu, int that_cpu);
 
+#if defined(CONFIG_MTK_SCHED_CMP) || defined(CONFIG_SCHED_HMP)
+struct clb_stats {
+	int ncpu;                     /* The number of CPU */
+	int ntask;                    /* The number of tasks */
+	int load_avg;                 /* Arithmetic average of task load ratio */
+	int cpu_capacity;             /* Current CPU capacity */
+	int cpu_power;                /* Max CPU capacity */
+	int acap;                     /* Available CPU capacity */
+	int scaled_acap;              /* Scaled available CPU capacity */
+	int scaled_atask;             /* Scaled available task */
+	int threshold;                /* Dynamic threshold */
+#ifdef CONFIG_SCHED_HMP_PRIO_FILTER
+	int nr_normal_prio_task;      /* The number of normal-prio tasks */
+	int nr_dequeuing_low_prio;    /* The number of dequeuing low-prio tasks */
+#endif
+};
+#endif /* defined(CONFIG_MTK_SCHED_CMP) || defined(CONFIG_SCHED_HMP) */
+
 typedef const struct cpumask *(*sched_domain_mask_f)(int cpu);
 typedef int (*sched_domain_flags_f)(void);
-typedef const struct sched_group_energy *(*sched_domain_energy_f)(int cpu);
 
 #define SDTL_OVERLAP	0x01
 
@@ -1032,13 +1049,11 @@ struct sd_data {
 	struct sched_domain **__percpu sd;
 	struct sched_group **__percpu sg;
 	struct sched_group_capacity **__percpu sgc;
-	struct sched_group_energy **__percpu sge;
 };
 
 struct sched_domain_topology_level {
 	sched_domain_mask_f mask;
 	sched_domain_flags_f sd_flags;
-	sched_domain_energy_f energy;
 	int		    flags;
 	int		    numa_level;
 	struct sd_data      data;
@@ -1058,6 +1073,20 @@ extern void wake_up_if_idle(int cpu);
 # define SD_INIT_NAME(type)
 #endif
 
+#ifdef CONFIG_SCHED_HMP
+struct hmp_domain {
+	struct cpumask cpus;
+	struct cpumask possible_cpus;
+	struct list_head hmp_domains;
+};
+
+#ifdef CONFIG_HMP_TRACER
+struct hmp_statisic {
+	unsigned int nr_force_up;   /* The number of task force up-migration */
+	unsigned int nr_force_down; /* The number of task force down-migration */
+};
+#endif /* CONFIG_HMP_TRACER */
+#endif /* CONFIG_SCHED_HMP */
 #else /* CONFIG_SMP */
 
 struct sched_domain_attr;
@@ -1106,7 +1135,7 @@ struct sched_avg {
 	 * is runnable on a rq. It is based on both runnable_avg_sum and the
 	 * weight of the task.
 	 */
-	unsigned long load_avg_contrib, utilization_avg_contrib;
+	unsigned long load_avg_contrib, utilization_avg_contrib, loadwop_avg_contrib;
 	/*
 	 * These sums represent an infinite geometric series and so are bound
 	 * above by 1024/(1-y).  Thus we only need a u32 to store them for all
@@ -1118,6 +1147,16 @@ struct sched_avg {
 	 * running_avg_sum.
 	 */
 	u32 runnable_avg_sum, avg_period, running_avg_sum;
+#ifdef CONFIG_SCHED_HMP
+	unsigned long pending_load;
+	u32 nr_pending;
+#ifdef CONFIG_SCHED_HMP_PRIO_FILTER
+	u32 nr_dequeuing_low_prio;
+	u32 nr_normal_prio;
+#endif
+	u64 hmp_last_up_migration;
+	u64 hmp_last_down_migration;
+#endif /* CONFIG_SCHED_HMP */
 };
 
 #ifdef CONFIG_SCHEDSTATS
@@ -1285,6 +1324,40 @@ enum perf_event_task_context {
 	perf_nr_task_contexts,
 };
 
+#ifdef CONFIG_MTK_SCHED_CMP_TGS
+struct thread_group_info_t {
+	/* # of cfs threas in the thread group per cluster*/
+	unsigned long cfs_nr_running;
+	/* # of threads in the thread group per cluster */
+	unsigned long nr_running;
+	/* runnable contrib of the thread group per cluster */
+	unsigned long loadwop_avg_contrib;
+};
+
+#endif
+
+#ifdef CONFIG_MT_SCHED_TRACE
+#ifdef CONFIG_MT_SCHED_DEBUG
+#define mt_sched_printf(event, x...) \
+do { \
+	char strings[128] = "";  \
+	snprintf(strings, 128, x); \
+	pr_alert(x); \
+	trace_##event(strings); \
+} while (0)
+#else
+#define mt_sched_printf(event, x...) \
+do { \
+	char strings[128] = "";  \
+	snprintf(strings, 128, x); \
+	trace_##event(strings); \
+} while (0)
+
+#endif
+#else
+#define mt_sched_printf(event, x...) do {} while (0)
+#endif
+
 struct task_struct {
 	volatile long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
 	void *stack;
@@ -1401,6 +1474,11 @@ struct task_struct {
 	struct list_head sibling;	/* linkage in my parent's children list */
 	struct task_struct *group_leader;	/* threadgroup leader */
 
+#ifdef CONFIG_MTK_SCHED_CMP_TGS
+	raw_spinlock_t thread_group_info_lock;
+	struct thread_group_info_t *thread_group_info;
+#endif
+
 	/*
 	 * ptraced is the list of tasks this task is using ptrace on.
 	 * This includes both natural children and PTRACE_ATTACH targets.
@@ -1438,6 +1516,12 @@ struct task_struct {
 	u64 real_start_time;	/* boot based time in nsec */
 /* mm fault and swap info: this can arguably be seen as either mm-specific or thread-specific */
 	unsigned long min_flt, maj_flt;
+
+	/* for thrashing accounting */
+	unsigned long fm_flt;
+#ifdef CONFIG_SWAP
+	unsigned long swap_in, swap_out;
+#endif
 
 	struct task_cputime cputime_expires;
 	struct list_head cpu_timers[3];
@@ -1715,6 +1799,10 @@ struct task_struct {
 	unsigned int	sequential_io;
 	unsigned int	sequential_io_avg;
 #endif
+#ifdef CONFIG_PREEMPT_MONITOR
+	unsigned long preempt_dur;
+#endif
+
 };
 
 /* Future-safe accessor for struct task_struct's cpus_allowed. */
@@ -1982,6 +2070,8 @@ extern int task_free_unregister(struct notifier_block *n);
 #define PF_MUTEX_TESTER	0x20000000	/* Thread belongs to the rt mutex tester */
 #define PF_FREEZER_SKIP	0x40000000	/* Freezer should not count it as freezable */
 #define PF_SUSPEND_TASK 0x80000000      /* this thread called freeze_processes and should not be frozen */
+
+#define PF_SU			0x10000000      /* task is su */
 
 /*
  * Only the _current_ task can read/write to tsk->flags, but other

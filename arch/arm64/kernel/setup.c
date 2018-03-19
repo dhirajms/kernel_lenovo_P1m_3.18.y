@@ -83,6 +83,7 @@ unsigned int compat_elf_hwcap2 __read_mostly;
 DECLARE_BITMAP(cpu_hwcaps, ARM64_NCAPS);
 
 static const char *cpu_name;
+static const char *machine_name;
 phys_addr_t __fdt_pointer __initdata;
 
 /*
@@ -315,6 +316,7 @@ static void __init setup_machine_fdt(phys_addr_t dt_phys)
 			cpu_relax();
 	}
 
+	machine_name = of_flat_dt_get_machine_name();
 	dump_stack_set_arch_desc("%s (DT)", of_flat_dt_get_machine_name());
 }
 
@@ -493,6 +495,11 @@ static int c_show(struct seq_file *m, void *v)
 {
 	int i, j;
 
+	pr_err("Dump cpuinfo\n");
+
+	seq_printf(m, "Processor\t: %s rev %d (%s)\n",
+		   cpu_name, read_cpuid_id() & 15, ELF_PLATFORM);
+
 	for_each_online_cpu(i) {
 		struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
 		u32 midr = cpuinfo->reg_midr;
@@ -541,6 +548,8 @@ static int c_show(struct seq_file *m, void *v)
 		seq_printf(m, "CPU part\t: 0x%03x\n", MIDR_PARTNUM(midr));
 		seq_printf(m, "CPU revision\t: %d\n\n", MIDR_REVISION(midr));
 	}
+
+	seq_printf(m, "Hardware\t: %s\n", machine_name);
 
 	return 0;
 }

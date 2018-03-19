@@ -435,6 +435,7 @@ static int save_trace(struct stack_trace *trace)
 			return 0;
 
 		print_lockdep_off("BUG: MAX_STACK_TRACE_ENTRIES too low!");
+		lockdep_aee();
 		dump_stack();
 
 		return 0;
@@ -570,6 +571,7 @@ static void print_lock(struct held_lock *hlock)
 	struct lock_class *lock = hlock_class(hlock);
 
 	if (lock != NULL) {
+		pr_emerg("[%p]", lock->key);
 		print_lock_name(lock);
 		pr_emerg(", at: ");
 		print_ip_sym(hlock->acquire_ip);
@@ -589,8 +591,8 @@ static void lockdep_print_held_locks(struct task_struct *curr)
 	}
 	if (curr->state == TASK_RUNNING)
 		pr_emerg("[Caution!] %s/%d is runable state\n", curr->comm, curr->pid);
-	printk("%d lock%s held by %s/%d:\n",
-		depth, depth > 1 ? "s" : "", curr->comm, task_pid_nr(curr));
+	pr_emerg("%d lock%s held by %s/%d tid:%d:\n",
+		depth, depth > 1 ? "s" : "", curr->comm, task_pid_nr(curr), task_tgid_nr(curr));
 
 	for (i = 0; i < depth; i++) {
 		printk(" #%d: ", i);
@@ -868,6 +870,7 @@ static struct lock_list *alloc_list_entry(void)
 		if (!debug_locks_off_graph_unlock())
 			return NULL;
 
+		lockdep_aee();
 		print_lockdep_off("BUG: MAX_LOCKDEP_ENTRIES too low!");
 		dump_stack();
 		return NULL;

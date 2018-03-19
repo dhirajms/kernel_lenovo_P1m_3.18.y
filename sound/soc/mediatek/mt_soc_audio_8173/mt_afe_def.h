@@ -19,7 +19,6 @@
 #define COMMON_CLOCK_FRAMEWORK_API
 #define IDLE_TASK_DRIVER_API
 #define AUDIO_MEMORY_SRAM
-/* #define AUDIO_BTSCO_MEMORY_SRAM */
 #define AUDIO_MEM_IOREMAP
 #define AUDIO_IOREMAP_FROM_DT
 
@@ -27,7 +26,6 @@
 /* if need assert , use AUDIO_ASSERT(true) */
 #define AUDIO_ASSERT(value) BUG_ON(false)
 #define ENUM_TO_STR(enum) #enum
-#define UPLINK_IRQ_DELAY_SAMPLES 3
 
 /**********************************
  *  Other Definitions             *
@@ -93,7 +91,7 @@
      PCM buffer size and period size setting
 */
 
-#define DL1_MAX_BUFFER_SIZE     (32*1024)
+#define DL1_MAX_BUFFER_SIZE     (16*1024)
 #define DL2_MAX_BUFFER_SIZE     (32*1024)
 #define UL1_MAX_BUFFER_SIZE     (32*1024)
 #define UL2_MAX_BUFFER_SIZE     (32*1024)
@@ -139,7 +137,7 @@
 #define SOC_NORMAL_USE_CHANNELS_MAX     2
 #define SOC_NORMAL_USE_PERIODS_MIN      2
 #define SOC_NORMAL_USE_PERIODS_MAX      256
-#define SOC_NORMAL_USE_PERIOD_SIZE_MIN  (128)
+#define SOC_NORMAL_USE_PERIOD_SIZE_MIN  (512)
 
 
 static const unsigned int soc_normal_supported_sample_rates[] = {

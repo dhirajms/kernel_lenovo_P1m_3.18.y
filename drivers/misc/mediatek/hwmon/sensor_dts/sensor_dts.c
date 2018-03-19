@@ -17,16 +17,10 @@
 #include <cust_alsps.h>
 #include <cust_acc.h>
 #include <cust_gyro.h>
-#ifdef CONFIG_CUSTOM_KERNEL_MAGNETOMETER
 #include <cust_mag.h>
-#endif
-
-#ifdef CONFIG_CUSTOM_KERNEL_BAROMETER
 #include <cust_baro.h>
-#endif
-#ifdef CONFIG_CUSTOM_KERNEL_HUMIDITY
 #include <cust_hmdy.h>
-#endif
+
 
 #define SENSOR_TAG				  "[Sensor dts] "
 #define SENSOR_ERR(fmt, args...)	pr_err(SENSOR_TAG fmt, ##args)
@@ -182,7 +176,6 @@ struct alsps_hw *get_alsps_dts_func(const char *name, struct alsps_hw *hw)
 	return hw;
 }
 
-#ifdef CONFIG_CUSTOM_KERNEL_MAGNETOMETER
 struct mag_hw *get_mag_dts_func(const char *name, struct mag_hw *hw)
 {
 	int i, ret;
@@ -236,7 +229,6 @@ struct mag_hw *get_mag_dts_func(const char *name, struct mag_hw *hw)
 	}
 	return hw;
 }
-#endif
 
 struct gyro_hw *get_gyro_dts_func(const char *name, struct gyro_hw *hw)
 {
@@ -297,7 +289,6 @@ struct gyro_hw *get_gyro_dts_func(const char *name, struct gyro_hw *hw)
 	return hw;
 }
 
-#ifdef CONFIG_CUSTOM_KERNEL_BAROMETER
 struct baro_hw *get_baro_dts_func(const char *name, struct baro_hw *hw)
 {
 	int i, ret;
@@ -356,9 +347,7 @@ struct baro_hw *get_baro_dts_func(const char *name, struct baro_hw *hw)
 	}
 	return hw;
 }
-#endif
 
-#ifdef CONFIG_CUSTOM_KERNEL_HUMIDITY
 struct hmdy_hw *get_hmdy_dts_func(const char *name, struct hmdy_hw *hw)
 {
 	int i, ret;
@@ -417,5 +406,4 @@ struct hmdy_hw *get_hmdy_dts_func(const char *name, struct hmdy_hw *hw)
 	}
 	return hw;
 }
-#endif
 

@@ -8,6 +8,7 @@
 #include "mt-plat/mtk_thermal_monitor.h"
 #include "mtk_thermal_typedefs.h"
 #include "mach/mt_thermal.h"
+#include "mt-plat/mtk_thermal_platform.h"
 #include <linux/slab.h>
 #include <linux/seq_file.h>
 #include <tscpu_settings.h>
@@ -23,7 +24,14 @@
 
 static int mtkts_ta_debug_log;
 
+#define tsta_dprintk(fmt, args...)   \
+	do {                                    \
+		if (mtkts_ta_debug_log) {                \
+			pr_debug("[Thermal_TA]" fmt, ##args); \
+		}                                   \
+	} while (0)
 
+#define tsta_warn(fmt, args...)  pr_warn("[Thermal_TA]" fmt, ##args)
 
 /*=============================================================
  *Local variable definition
@@ -57,7 +65,8 @@ void atm_ctrl_cmd_from_user(void *nl_data, struct tad_nl_msg_t *ret_msg)
 
 	msg = nl_data;
 
-	tsta_dprintk("[atm_ctrl_cmd_from_user] tad_cmd = %d, tad_data_len = %d\n" , msg->tad_cmd , msg->tad_data_len);
+	/*tsta_dprintk("[atm_ctrl_cmd_from_user] tad_cmd = %d, tad_data_len = %d\n" ,
+	msg->tad_cmd , msg->tad_data_len);*/
 
 	ret_msg->tad_cmd = msg->tad_cmd;
 
@@ -220,7 +229,6 @@ static ssize_t tsta_write_log(struct file *file, const char __user *buffer, size
 	char desc[32];
 	int log_switch;
 	int len = 0;
-	int rc;
 
 
 	len = (count < (sizeof(desc) - 1)) ? count : (sizeof(desc) - 1);
@@ -229,14 +237,11 @@ static ssize_t tsta_write_log(struct file *file, const char __user *buffer, size
 
 	desc[len] = '\0';
 
-	rc = kstrtoint(desc, 0, &log_switch);
+	if (kstrtoint(desc, 10, &log_switch) == 0) {
+		mtkts_ta_debug_log = log_switch;
 
-	if (rc != 0)
-		return -EINVAL;
-
-	mtkts_ta_debug_log = log_switch;
-
-	return count;
+		return count;
+	}
 
 	tsta_warn("tscpu_write_log bad argument\n");
 

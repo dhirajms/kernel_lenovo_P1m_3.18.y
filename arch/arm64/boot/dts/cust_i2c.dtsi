@@ -27,9 +27,9 @@
 };
 
 &i2c1 {
-	cap_touch@5d {
-		compatible = "mediatek,cap_touch";
-		reg = <0x5d>;
+	cap_touch@38 {
+		compatible = "mediatek,cap_touch_cust";
+		reg = <0x38>;
 	};
 
 	i2c_lcd_bias@3e {
@@ -50,9 +50,9 @@
 		reg = <0x68>;
 	};
 
-	gsensor@18 {
+	gsensor@1E {
 		compatible = "mediatek,gsensor";
-		reg = <0x18>;
+		reg = <0x1E>;
 	};
 
 	alsps@49 {
@@ -69,4 +69,3 @@
 		compatible = "mediatek,strobe_main";
 		reg = <0x63>;
 	};
-};

@@ -5,6 +5,7 @@
 #include <linux/smp.h>
 #include <linux/delay.h>
 #include <linux/atomic.h>
+#include <linux/irqchip/mt-gic.h>
 #include <mt-plat/aee.h>
 #include <mt-plat/mt_chip.h>
 #include <mach/mt_spm_mtcmos_internal.h>
@@ -240,7 +241,9 @@ static int spm_irq_register(void)
 		mt_gic_cfg_irq2cpu(irqdesc[i].irq, i % num_possible_cpus(), 1);
 #endif
 	}
-
+#if defined(CONFIG_ARCH_MT6580)
+	mt_gic_set_priority(SPM_IRQ0_ID);
+#endif
 	return r;
 }
 
@@ -318,13 +321,6 @@ static void spm_register_init(void)
 	scp_i2c2_base = of_iomap(node, 0);
 	if (!scp_i2c2_base)
 		spm_err("base scp_i2c2_base failed\n");
-
-	node = of_find_compatible_node(NULL, NULL, "mediatek,I2C4");
-	if (!node)
-		spm_err("find I2C4 node failed\n");
-	i2c4_base = of_iomap(node, 0);
-	if (!i2c4_base)
-		spm_err("base i2c4_base failed\n");
 
 	spm_err
 	    ("spm_base = %p, scp_i2c0_base = %p, scp_i2c1_base = %p, scp_i2c2_base = %p\n",

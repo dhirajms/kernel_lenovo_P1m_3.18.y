@@ -39,7 +39,6 @@
 			reg = <0>;
 			cci-control-port = <&cci_control1>;
 			cpu-idle-states = <&CLUSTER_SLEEP_BIG>;
-			clock-frequency = <1000000000>;
 		};
 
 		cpu1: cpu@1 {
@@ -48,7 +47,6 @@
 			reg = <1>;
 			cci-control-port = <&cci_control1>;
 			cpu-idle-states = <&CLUSTER_SLEEP_BIG>;
-			clock-frequency = <1000000000>;
 		};
 
 		cpu2: cpu@2 {
@@ -57,7 +55,6 @@
 			reg = <0x100>;
 			cci-control-port = <&cci_control2>;
 			cpu-idle-states = <&CLUSTER_SLEEP_LITTLE>;
-			clock-frequency = <800000000>;
 		};
 
 		cpu3: cpu@3 {
@@ -66,7 +63,6 @@
 			reg = <0x101>;
 			cci-control-port = <&cci_control2>;
 			cpu-idle-states = <&CLUSTER_SLEEP_LITTLE>;
-			clock-frequency = <800000000>;
 		};
 
 		cpu4: cpu@4 {
@@ -75,7 +71,6 @@
 			reg = <0x102>;
 			cci-control-port = <&cci_control2>;
 			cpu-idle-states = <&CLUSTER_SLEEP_LITTLE>;
-			clock-frequency = <800000000>;
 		};
 
 		idle-states {

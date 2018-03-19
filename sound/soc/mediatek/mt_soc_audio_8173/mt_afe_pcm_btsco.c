@@ -18,7 +18,6 @@
 #include <linux/module.h>
 #include <sound/soc.h>
 #include <linux/dma-mapping.h>
-#include <linux/delay.h>
 
 /*
  *    function implementation
@@ -129,7 +128,7 @@ static int mt_pcm_btsco_hw_params(struct snd_pcm_substream *substream,
 		dma_buf->dev.type = SNDRV_DMA_TYPE_DEV;
 		dma_buf->dev.dev = substream->pcm->card->dev;
 		dma_buf->private_data = NULL;
-#ifdef AUDIO_BTSCO_MEMORY_SRAM
+#ifdef AUDIO_MEMORY_SRAM
 		if (buffer_size > BT_DL_MAX_BUFFER_SIZE) {
 			pr_warn("%s request size %zu > max size %d\n", __func__,
 				buffer_size, BT_DL_MAX_BUFFER_SIZE);
@@ -167,7 +166,7 @@ static int mt_pcm_btsco_hw_free(struct snd_pcm_substream *substream)
 	pr_debug("%s stream = %d\n", __func__, substream->stream);
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-#ifndef AUDIO_BTSCO_MEMORY_SRAM
+#ifndef AUDIO_MEMORY_SRAM
 		snd_pcm_lib_free_pages(substream);
 #endif
 	} else if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
@@ -251,19 +250,6 @@ static int mt_pcm_btsco_start(struct snd_pcm_substream *substream)
 		mt_afe_set_sample_rate(MT_AFE_DIGITAL_BLOCK_MEM_DAI, runtime->rate);
 		mt_afe_enable_memory_path(MT_AFE_DIGITAL_BLOCK_MEM_DAI);
 
-		if (mt_afe_get_memory_path_state(MT_AFE_DIGITAL_BLOCK_DAI_BT) == false) {
-			mt_afe_enable_memory_path(MT_AFE_DIGITAL_BLOCK_DAI_BT);
-			set_voip_dai_bt_attribute(substream->runtime->rate);
-			mt_afe_enable_dai_bt();
-		} else {
-			mt_afe_enable_memory_path(MT_AFE_DIGITAL_BLOCK_DAI_BT);
-		}
-
-		mt_afe_enable_afe(true);
-
-		if (UPLINK_IRQ_DELAY_SAMPLES > 0)
-			udelay(UPLINK_IRQ_DELAY_SAMPLES * 1000000 / runtime->rate);
-
 		/* here to set interrupt */
 		mt_afe_get_irq_state(MT_AFE_IRQ_MCU_MODE_IRQ2, &irq_status);
 		if (irq_status.status == false) {
@@ -274,6 +260,16 @@ static int mt_pcm_btsco_start(struct snd_pcm_substream *substream)
 			pr_debug("%s IRQ2_MCU_MODE is enabled, use original irq2 interrupt mode\n",
 				 __func__);
 		}
+
+		if (mt_afe_get_memory_path_state(MT_AFE_DIGITAL_BLOCK_DAI_BT) == false) {
+			mt_afe_enable_memory_path(MT_AFE_DIGITAL_BLOCK_DAI_BT);
+			set_voip_dai_bt_attribute(substream->runtime->rate);
+			mt_afe_enable_dai_bt();
+		} else {
+			mt_afe_enable_memory_path(MT_AFE_DIGITAL_BLOCK_DAI_BT);
+		}
+
+		mt_afe_enable_afe(true);
 	}
 
 	return 0;

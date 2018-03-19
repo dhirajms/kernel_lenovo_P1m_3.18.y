@@ -23,15 +23,22 @@
 *                    E X T E R N A L   R E F E R E N C E S
 ********************************************************************************
 */
-
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/suspend.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
+
 #ifdef CONFIG_EARLYSUSPEND
 #include <linux/earlysuspend.h>
+#else
+#include <linux/fb.h>
 #endif
+
+#ifdef CONFIG_COMPAT
+#include <linux/compat.h>
+#endif
+
 #include "wmt_dev.h"
 #include "wmt_core.h"
 #include "wmt_exp.h"
@@ -44,9 +51,6 @@
 #include "wmt_dbg.h"
 #include "wmt_idc.h"
 #include "osal.h"
-#ifdef CONFIG_COMPAT
-#include <linux/compat.h>
-#endif
 
 #ifdef CONFIG_COMPAT
 #define COMPAT_WMT_IOCTL_SET_PATCH_NAME		_IOW(WMT_IOC_MAGIC, 4, compat_uptr_t)
@@ -54,6 +58,8 @@
 #define COMPAT_WMT_IOCTL_SET_PATCH_INFO		_IOW(WMT_IOC_MAGIC, 15, compat_uptr_t)
 #define COMPAT_WMT_IOCTL_PORT_NAME			_IOWR(WMT_IOC_MAGIC, 20, compat_uptr_t)
 #define COMPAT_WMT_IOCTL_WMT_CFG_NAME		_IOWR(WMT_IOC_MAGIC, 21, compat_uptr_t)
+#define COMPAT_WMT_IOCTL_SEND_BGW_DS_CMD	_IOW(WMT_IOC_MAGIC, 25, compat_uptr_t)
+#define COMPAT_WMT_IOCTL_ADIE_LPBK_TEST		_IOWR(WMT_IOC_MAGIC, 26, compat_uptr_t)
 #endif
 
 #define WMT_IOC_MAGIC        0xa0
@@ -125,27 +131,25 @@ static wait_queue_head_t gWmtInitWq;
 P_WMT_PATCH_INFO pPatchInfo = NULL;
 UINT32 pAtchNum = 0;
 
-#ifdef MTK_COMBO_COMM_APO
+#ifdef CONFIG_MTK_COMBO_COMM_APO
 static int combo_comm_apo_flag = 1;
 #else
 static int combo_comm_apo_flag;
 #endif
 
-#if CONSYS_WMT_REG_SUSPEND_CB_ENABLE || defined(CONFIG_EARLYSUSPEND)
-#ifdef MTK_COMBO_COMM_APO
+#ifdef CONFIG_MTK_COMBO_COMM_APO
+OSAL_SLEEPABLE_LOCK g_es_lr_lock;
 static int mtk_wmt_func_off_background(void);
 static int mtk_wmt_func_on_background(void);
-OSAL_SLEEPABLE_LOCK g_es_lr_lock;
-#endif /*MTK_COMBO_COMM_APO end*/
-#endif
+#endif /*CONFIG_MTK_COMBO_COMM_APO end*/
 
 static int WMT_open(struct inode *inode, struct file *file);
 
 static int WMT_close(struct inode *inode, struct file *file);
 
-#ifdef CONFIG_EARLYSUSPEND
-#ifdef MTK_COMBO_COMM_APO
 UINT32 g_early_suspend_flag = 0;
+#ifdef CONFIG_MTK_COMBO_COMM_APO
+#ifdef CONFIG_EARLYSUSPEND
 static void wmt_dev_early_suspend(struct early_suspend *h)
 {
 	osal_lock_sleepable_lock(&g_es_lr_lock);
@@ -171,18 +175,51 @@ struct early_suspend wmt_early_suspend_handler = {
 	.suspend = wmt_dev_early_suspend,
 	.resume = wmt_dev_late_resume,
 };
-#endif /*MTK_COMBO_COMM_APO end*/
 #else
-UINT32 g_early_suspend_flag = 0;
+static struct notifier_block wmt_fb_notifier;
+static int wmt_fb_notifier_callback(struct notifier_block *self, unsigned long event, void *data)
+{
+	struct fb_event *evdata = data;
+	INT32 blank;
+
+	WMT_DBG_FUNC("wmt_fb_notifier_callback\n");
+
+	/* If we aren't interested in this event, skip it immediately ... */
+	if (event != FB_EVENT_BLANK)
+		return 0;
+
+	blank = *(INT32 *)evdata->data;
+	WMT_DBG_FUNC("fb_notify(blank=%d)\n", blank);
+
+	switch (blank) {
+	case FB_BLANK_UNBLANK:
+		osal_lock_sleepable_lock(&g_es_lr_lock);
+		g_early_suspend_flag = 0;
+		osal_unlock_sleepable_lock(&g_es_lr_lock);
+		WMT_WARN_FUNC("@@@@@@@@@@wmt enter UNBLANK @@@@@@@@@@@@@@\n");
+		mtk_wmt_func_on_background();
+		break;
+	case FB_BLANK_POWERDOWN:
+		osal_lock_sleepable_lock(&g_es_lr_lock);
+		g_early_suspend_flag = 1;
+		osal_unlock_sleepable_lock(&g_es_lr_lock);
+		WMT_WARN_FUNC("@@@@@@@@@@wmt enter early POWERDOWN @@@@@@@@@@@@@@\n");
+		mtk_wmt_func_off_background();
+		break;
+	default:
+		break;
+	}
+	return 0;
+}
 #endif
+#endif /*CONFIG_MTK_COMBO_COMM_APO end*/
 /*******************************************************************************
 *                          F U N C T I O N S
 ********************************************************************************
 */
 
 
-#if CONSYS_WMT_REG_SUSPEND_CB_ENABLE || defined(CONFIG_EARLYSUSPEND)
-#ifdef MTK_COMBO_COMM_APO
+#ifdef CONFIG_MTK_COMBO_COMM_APO
 static INT32 wmt_pwr_on_thread(void *pvData)
 {
 	INT32 retryCounter = 1;
@@ -251,8 +288,7 @@ static INT32 mtk_wmt_func_off_background(void)
 	}
 	return 0;
 }
-#endif /*MTK_COMBO_COMM_APO end*/
-#endif
+#endif /*CONFIG_MTK_COMBO_COMM_APO end*/
 
 #if CFG_WMT_PROC_FOR_AEE
 
@@ -1265,6 +1301,7 @@ long WMT_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		}
 	case WMT_IOCTL_GET_APO_FLAG:
 		iRet = combo_comm_apo_flag;
+		WMT_INFO_FUNC("always power on flag: %d!\n", combo_comm_apo_flag);
 		break;
 	default:
 		iRet = -EINVAL;
@@ -1279,32 +1316,30 @@ long WMT_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 #ifdef CONFIG_COMPAT
 long WMT_compat_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
+	long ret;
+
 	WMT_INFO_FUNC("cmd[0x%x]\n", cmd);
 	switch (cmd) {
 	case COMPAT_WMT_IOCTL_SET_PATCH_NAME:
-		arg = (unsigned long)compat_ptr(arg);
-		cmd = WMT_IOCTL_SET_PATCH_NAME;
+		ret = WMT_unlocked_ioctl(filp, WMT_IOCTL_SET_PATCH_NAME, (unsigned long)compat_ptr(arg));
 		break;
 	case COMPAT_WMT_IOCTL_LPBK_TEST:
-		arg = (unsigned long)compat_ptr(arg);
-		cmd = WMT_IOCTL_LPBK_TEST;
+		ret = WMT_unlocked_ioctl(filp, WMT_IOCTL_LPBK_TEST, (unsigned long)compat_ptr(arg));
 		break;
 	case COMPAT_WMT_IOCTL_SET_PATCH_INFO:
-		arg = (unsigned long)compat_ptr(arg);
-		cmd = WMT_IOCTL_SET_PATCH_INFO;
+		ret = WMT_unlocked_ioctl(filp, WMT_IOCTL_SET_PATCH_INFO, (unsigned long)compat_ptr(arg));
 		break;
 	case COMPAT_WMT_IOCTL_PORT_NAME:
-		arg = (unsigned long)compat_ptr(arg);
-		cmd = WMT_IOCTL_PORT_NAME;
+		ret = WMT_unlocked_ioctl(filp, WMT_IOCTL_PORT_NAME, (unsigned long)compat_ptr(arg));
 		break;
 	case COMPAT_WMT_IOCTL_WMT_CFG_NAME:
-		arg = (unsigned long)compat_ptr(arg);
-		cmd = WMT_IOCTL_WMT_CFG_NAME;
+		ret = WMT_unlocked_ioctl(filp, WMT_IOCTL_WMT_CFG_NAME, (unsigned long)compat_ptr(arg));
 		break;
 	default:
+		ret = WMT_unlocked_ioctl(filp, cmd, arg);
 		break;
 	}
-	return  WMT_unlocked_ioctl(filp, cmd, arg);
+	return ret;
 }
 #endif
 
@@ -1356,8 +1391,8 @@ const struct file_operations gWmtFops = {
 struct class *wmt_class = NULL;
 #endif
 
+#ifdef CONFIG_MTK_COMBO_COMM_APO
 #if CONSYS_WMT_REG_SUSPEND_CB_ENABLE || defined(CONFIG_EARLYSUSPEND)
-#ifdef MTK_COMBO_COMM_APO
 static int wmt_pm_event(struct notifier_block *notifier, unsigned long pm_event, void *unused)
 {
 	switch (pm_event) {
@@ -1377,8 +1412,8 @@ static struct notifier_block wmt_pm_notifier_block = {
 	.notifier_call = wmt_pm_event,
 	.priority = 0,
 };
-#endif /*MTK_COMBO_COMM_APO end*/
 #endif				/* CONSYS_WMT_REG_SUSPEND_CB_ENABLE */
+#endif /*CONFIG_MTK_COMBO_COMM_APO end*/
 
 int WMT_init(void)
 {
@@ -1458,22 +1493,29 @@ int WMT_init(void)
 #endif
 
 	mtk_wcn_hif_sdio_update_cb_reg(wmt_dev_tra_sdio_update);
+#ifdef CONFIG_MTK_COMBO_COMM_APO
 #if CONSYS_WMT_REG_SUSPEND_CB_ENABLE || defined(CONFIG_EARLYSUSPEND)
-#ifdef MTK_COMBO_COMM_APO
 	ret = register_pm_notifier(&wmt_pm_notifier_block);
 	if (ret)
 		WMT_ERR_FUNC("WMT failed to register PM notifier failed(%d)\n", ret);
-#endif /*MTK_COMBO_COMM_APO end*/
 #endif
+#endif /*CONFIG_MTK_COMBO_COMM_APO end*/
 	gWmtInitDone = 1;
 	wake_up(&gWmtInitWq);
-#ifdef CONFIG_EARLYSUSPEND
-#ifdef MTK_COMBO_COMM_APO
+#ifdef CONFIG_MTK_COMBO_COMM_APO
 	osal_sleepable_lock_init(&g_es_lr_lock);
+#ifdef CONFIG_EARLYSUSPEND
 	register_early_suspend(&wmt_early_suspend_handler);
 	WMT_INFO_FUNC("register_early_suspend finished\n");
-#endif /*MTK_COMBO_COMM_APO end*/
+#else
+	wmt_fb_notifier.notifier_call = wmt_fb_notifier_callback;
+	ret = fb_register_client(&wmt_fb_notifier);
+	if (ret)
+		WMT_ERR_FUNC("wmt register fb_notifier failed! ret(%d)\n", ret);
+	else
+		WMT_INFO_FUNC("wmt register fb_notifier OK!\n");
 #endif
+#endif /*CONFIG_MTK_COMBO_COMM_APO end*/
 	WMT_INFO_FUNC("success\n");
 	return 0;
 
@@ -1508,18 +1550,18 @@ int WMT_exit(void)
 {
 	dev_t dev = MKDEV(gWmtMajor, 0);
 
-#ifdef CONFIG_EARLYSUSPEND
-#ifdef MTK_COMBO_COMM_APO
-	unregister_early_suspend(&wmt_early_suspend_handler);
+#ifdef CONFIG_MTK_COMBO_COMM_APO
 	osal_sleepable_lock_deinit(&g_es_lr_lock);
+#ifdef CONFIG_EARLYSUSPEND
+	unregister_early_suspend(&wmt_early_suspend_handler);
 	WMT_INFO_FUNC("unregister_early_suspend finished\n");
-#endif /*MTK_COMBO_COMM_APO end*/
+#else
+	fb_unregister_client(&wmt_fb_notifier);
 #endif
 #if CONSYS_WMT_REG_SUSPEND_CB_ENABLE || defined(CONFIG_EARLYSUSPEND)
-#ifdef MTK_COMBO_COMM_APO
 	unregister_pm_notifier(&wmt_pm_notifier_block);
-#endif /*MTK_COMBO_COMM_APO end*/
 #endif
+#endif /*CONFIG_MTK_COMBO_COMM_APO end*/
 	wmt_lib_deinit();
 
 #if CFG_WMT_DBG_SUPPORT

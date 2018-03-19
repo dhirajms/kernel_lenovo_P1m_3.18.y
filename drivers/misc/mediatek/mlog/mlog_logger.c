@@ -16,18 +16,12 @@
 #include <asm/uaccess.h>
 #include <linux/version.h>
 
-/*#define COLLECT_GPU_MEMINFO*/
+#ifdef CONFIG_MTK_GPU_SUPPORT
+#define COLLECT_GPU_MEMINFO
+#endif
 
 #ifdef COLLECT_GPU_MEMINFO
-#include <linux/mtk_gpu_utility.h>
-#endif
-
-#ifdef CONFIG_ZSMALLOC
-#include <linux/zsmalloc.h>
-#endif
-
-#ifdef CONFIG_ZRAM
-#undef CONFIG_ZRAM
+#include <mt-plat/mtk_gpu_utility.h>
 #endif
 
 #ifdef CONFIG_ZRAM
@@ -344,7 +338,7 @@ static void mlog_reset_buffer(void)
 static void mlog_meminfo(void)
 {
 	unsigned long memfree;
-	unsigned long swapfree;
+	//unsigned long swapfree;
 	unsigned long cached;
 	unsigned int gpuuse = 0;
 	unsigned int gpu_page_cache = 0;
@@ -355,7 +349,7 @@ static void mlog_meminfo(void)
 	unsigned long ion = 0;
 
 	memfree = P2K(global_page_state(NR_FREE_PAGES) + mtkpasr_show_page_reserved());
-	swapfree = P2K(atomic_long_read(&nr_swap_pages));
+	//swapfree = P2K(atomic_long_read(&nr_swap_pages));
 	cached = P2K(global_page_state(NR_FILE_PAGES) - total_swapcache_pages());
 	/*
 	use following code if kernel version is under 3.10.
@@ -371,9 +365,8 @@ static void mlog_meminfo(void)
 #endif
 
 	mlock = P2K(global_page_state(NR_MLOCK));
-#if defined(CONFIG_ZRAM) & defined(CONFIG_ZSMALLOC)
-	zram = (zram_devices && zram_devices->init_done && zram_devices->meta) ?
-	    B2K(zs_get_total_size_bytes(zram_devices->meta->mem_pool)) : 0;
+#if defined(CONFIG_ZRAM) && defined(CONFIG_ZSMALLOC)
+	zram = zram_mlog();
 #else
 	zram = 0;
 #endif
@@ -389,7 +382,7 @@ static void mlog_meminfo(void)
 
 	spin_lock_bh(&mlogbuf_lock);
 	mlog_emit_32(memfree);
-	mlog_emit_32(swapfree);
+	//mlog_emit_32(swapfree);
 	mlog_emit_32(cached);
 	mlog_emit_32(gpuuse);
 	mlog_emit_32(gpu_page_cache);
@@ -584,8 +577,9 @@ collect_proc_mem_info:
 		do {
 			/* min_flt += t->min_flt; */
 			/* maj_flt += t->maj_flt; */
-#ifdef CONFIG_ZRAM
+
 			fm_flt += t->fm_flt;
+#ifdef CONFIG_SWAP
 			swap_in += t->swap_in;
 			swap_out += t->swap_out;
 #endif

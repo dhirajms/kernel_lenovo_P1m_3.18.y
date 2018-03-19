@@ -34,20 +34,10 @@ extern int arch_is_multi_cluster(void);
 extern int arch_is_smp(void);
 extern int arch_get_nr_clusters(void);
 extern int arch_get_cluster_id(unsigned int cpu);
-#define arch_scale_freq_capacity arm_arch_scale_freq_capacity
-struct sched_domain;
-extern
-unsigned long arm_arch_scale_freq_capacity(struct sched_domain *sd, int cpu);
-
-DECLARE_PER_CPU(atomic_long_t, cpu_freq_capacity);
-
 extern void arch_get_cluster_cpus(struct cpumask *cpus, int cluster_id);
 extern int arch_better_capacity(unsigned int cpu);
 
-#define arch_scale_cpu_capacity arm_arch_scale_cpu_capacity
-extern unsigned long arm_arch_scale_cpu_capacity(struct sched_domain *sd, int cpu);
-
-#else /* !CONFIG_SMP */
+#else /* !CONFIG_ARM_CPU_TOPOLOGY */
 
 static inline void init_cpu_topology(void) { }
 static inline void store_cpu_topology(unsigned int cpuid) { }
@@ -70,7 +60,11 @@ static inline void arch_get_cluster_cpus(struct cpumask *cpus, int cluster_id)
 }
 static inline int arch_better_capacity(unsigned int cpu) { return 0; }
 
-#endif /* CONFIG_SMP */
+#endif /* CONFIG_ARM_CPU_TOPOLOGY */
+
+#ifdef CONFIG_MTK_CPU_TOPOLOGY
+void arch_build_cpu_topology_domain(void);
+#endif
 
 #include <asm-generic/topology.h>
 

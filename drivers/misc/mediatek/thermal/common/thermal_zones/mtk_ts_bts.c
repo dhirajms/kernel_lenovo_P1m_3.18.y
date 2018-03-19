@@ -16,6 +16,7 @@
 #include "mt-plat/mtk_thermal_monitor.h"
 #include "mtk_thermal_typedefs.h"
 #include "mach/mt_thermal.h"
+#include "mt-plat/mtk_thermal_platform.h"
 #include <linux/uidgid.h>
 #include <tmp_bts.h>
 #include <linux/slab.h>
@@ -584,9 +585,9 @@ int mtkts_bts_get_hw_temp(void)
 
 	mutex_unlock(&BTS_lock);
 
-#if 0 /*def THERMAL_CATM_USER*/
-	wakeup_ta_algo(TA_CATMPLUS_TTJ);
-#endif
+
+	if (tsatm_thermal_get_catm_type() == 2)
+		wakeup_ta_algo(TA_CATMPLUS_TTJ);
 
 	bts_cur_temp = t_ret;
 
@@ -823,6 +824,14 @@ static ssize_t mtkts_bts_write(struct file *file, const char __user *buffer, siz
 		mtkts_bts_dprintk("[mtkts_bts_write] mtkts_bts_unregister_thermal\n");
 		mtkts_bts_unregister_thermal();
 
+		if (num_trip < 0 || num_trip > 10) {
+			aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "mtkts_bts_write",
+					"Bad argument");
+			mtkts_bts_dprintk("[mtkts_bts_write] bad argument\n");
+			kfree(ptr_mtktsbts_data);
+			return -EINVAL;
+		}
+
 		for (i = 0; i < num_trip; i++)
 			g_THERMAL_TRIP[i] = ptr_mtktsbts_data->t_type[i];
 
@@ -875,6 +884,8 @@ static ssize_t mtkts_bts_write(struct file *file, const char __user *buffer, siz
 	}
 
 	mtkts_bts_dprintk("[mtkts_bts_write] bad argument\n");
+	aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "mtkts_bts_write",
+			"Bad argument");
 	kfree(ptr_mtktsbts_data);
 	return -EINVAL;
 }
@@ -1075,8 +1086,15 @@ void mtkts_bts_cancel_thermal_timer(void)
 	/* pr_debug("mtkts_bts_cancel_thermal_timer\n"); */
 
 	/* stop thermal framework polling when entering deep idle */
+
+	/*
+	   We cannot cancel the timer during deepidle and SODI, because
+	   the battery may suddenly heat up by 3A fast charging.
+	*/
+	/*
 	if (thz_dev)
 		cancel_delayed_work(&(thz_dev->poll_queue));
+	*/
 }
 
 
@@ -1084,8 +1102,10 @@ void mtkts_bts_start_thermal_timer(void)
 {
 	/* pr_debug("mtkts_bts_start_thermal_timer\n"); */
 	/* resume thermal framework polling when leaving deep idle */
+	/*
 	if (thz_dev != NULL && interval != 0)
 		mod_delayed_work(system_freezable_wq, &(thz_dev->poll_queue), round_jiffies(msecs_to_jiffies(3000)));
+	*/
 }
 
 static int mtkts_bts_register_thermal(void)
@@ -1147,7 +1167,6 @@ static const struct file_operations mtkts_AP_param_fops = {
 
 static int __init mtkts_bts_init(void)
 {
-	int err = 0;
 	struct proc_dir_entry *entry = NULL;
 	struct proc_dir_entry *mtkts_AP_dir = NULL;
 
@@ -1174,9 +1193,6 @@ static int __init mtkts_bts_init(void)
 	}
 
 	return 0;
-
-	/* mtkts_AP_unregister_cooler(); */
-	return err;
 }
 
 static void __exit mtkts_bts_exit(void)

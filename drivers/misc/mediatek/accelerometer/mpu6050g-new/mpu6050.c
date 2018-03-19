@@ -29,6 +29,7 @@ struct acc_hw *get_cust_acc(void)
 	return &accel_cust;
 }
 /*----------------------------------------------------------------------------*/
+#define DEBUG 1
 /*----------------------------------------------------------------------------*/
 #define CONFIG_MPU6050_LOWPASS	/*apply low pass filter on output */
 #define SW_CALIBRATION

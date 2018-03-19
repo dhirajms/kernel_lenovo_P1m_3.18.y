@@ -9,6 +9,19 @@
 #define ARY_SIZE(x) (sizeof((x)) / sizeof((x[0])))
 #endif
 
+#ifdef CONFIG_WT_GAMMA_PQ_WITH_MULTI_LCM
+#define PQ_HUE_ADJ_PHASE_CNT 4
+#define PQ_SAT_ADJ_PHASE_CNT 4
+typedef struct {
+    unsigned int u4SHPGain;// 0 : min , 9 : max.
+    unsigned int u4SatGain;// 0 : min , 9 : max.
+    unsigned int u4HueAdj[PQ_HUE_ADJ_PHASE_CNT];
+    unsigned int u4SatAdj[PQ_SAT_ADJ_PHASE_CNT];
+    unsigned int u4Contrast;   // add for MiraVision
+    unsigned int u4Brightness; // add for MiraVision
+} DISP_PQ_PARAM_LCD;
+#endif
+
 /* --------------------------------------------------------------------------- */
 
 /* common enumerations */
@@ -423,7 +436,7 @@ typedef struct {
 typedef struct {
 	unsigned char cmd;
 	unsigned char count;
-	unsigned char para_list[2];
+	unsigned char para_list[3];
 } LCM_esd_check_item;
 typedef enum {
 	DUAL_DSI_NONE = 0x0,
@@ -624,6 +637,7 @@ typedef struct {
 } LCM_PARAMS;
 
 
+#if defined(MTK_LCM_DEVICE_TREE_SUPPORT)
 typedef struct {
 	char data;
 	char padding[131];
@@ -686,10 +700,11 @@ typedef struct {
 
 	LCM_PARAMS params;
 	LCM_DATA init[256];
-	LCM_DATA compare_id[8];
-	LCM_DATA suspend[8];
-	LCM_DATA backlight[8];
+	LCM_DATA compare_id[32];
+	LCM_DATA suspend[32];
+	LCM_DATA backlight[32];
 } LCM_DTS;
+#endif
 
 
 /* --------------------------------------------------------------------------- */
@@ -768,7 +783,9 @@ typedef struct {
 
 	void (*update)(unsigned int x, unsigned int y, unsigned int width, unsigned int height);
 	unsigned int (*compare_id)(void);
+#if defined(MTK_LCM_DEVICE_TREE_SUPPORT)
 	void (*parse_dts)(const LCM_DTS *DTS, unsigned char force_update);
+#endif
 
 	/* /////////////////////////CABC backlight related function */
 	void (*set_backlight)(unsigned int level);
@@ -800,6 +817,13 @@ typedef struct {
 			     unsigned int *lcm_value);
 	/* /////////////PWM///////////////////////////// */
 	void (*set_pwm_for_mix)(int enable);
+#ifdef CONFIG_WT_BRIGHTNESS_MAPPING_WITH_LCM
+	   unsigned int (*cust_mapping)(unsigned int level);
+   #endif
+   #ifdef CONFIG_WT_GAMMA_PQ_WITH_MULTI_LCM
+		   void (*pq_standard_param)(DISP_PQ_PARAM_LCD *pq_data);
+   void (*pq_vivid_param)(DISP_PQ_PARAM_LCD *pq_data);
+#endif
 } LCM_DRIVER;
 
 #if	defined(CONFIG_ARCH_MT6735) ||\

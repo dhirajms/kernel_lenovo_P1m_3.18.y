@@ -819,10 +819,17 @@ static struct pcm_desc suspend_pcm = {
 
 #else
 
+#if defined(CONFIG_MICROTRUST_TEE_SUPPORT)
+#define WAKE_SRC_FOR_SUSPEND \
+	(WAKE_SRC_KP | WAKE_SRC_EINT | WAKE_SRC_CONN_WDT | WAKE_SRC_CCIF0_MD | WAKE_SRC_CCIF1_MD | WAKE_SRC_CONN2AP | \
+	WAKE_SRC_USB_CD | WAKE_SRC_USB_PDN | \
+	 /*WAKE_SRC_SYSPWREQ |*/ WAKE_SRC_MD_WDT | WAKE_SRC_C2K_WDT | WAKE_SRC_CLDMA_MD)
+#else
 #define WAKE_SRC_FOR_SUSPEND \
 	(WAKE_SRC_KP | WAKE_SRC_EINT | WAKE_SRC_CONN_WDT | WAKE_SRC_CCIF0_MD | WAKE_SRC_CCIF1_MD | WAKE_SRC_CONN2AP | \
 	WAKE_SRC_USB_CD | WAKE_SRC_USB_PDN | WAKE_SRC_SEJ |\
 	 /*WAKE_SRC_SYSPWREQ |*/ WAKE_SRC_MD_WDT | WAKE_SRC_C2K_WDT | WAKE_SRC_CLDMA_MD)
+#endif
 
 #define spm_is_wakesrc_invalid(wakesrc)     (!!((u32)(wakesrc) & 0xc0003803))
 
@@ -1392,7 +1399,7 @@ static wake_reason_t spm_output_wake_reason(struct wake_status *wakesta, struct 
 static u32 spm_get_wake_period(int pwake_time, wake_reason_t last_wr)
 {
 	int period = SPM_WAKE_PERIOD;
-#if 0
+#if 1
 	if (pwake_time < 0) {
 		/* use FG to get the period of 1% battery decrease */
 		period = get_dynamic_period(last_wr != WR_PCM_TIMER ? 1 : 0, SPM_WAKE_PERIOD, 1);
@@ -1641,7 +1648,13 @@ wake_reason_t spm_go_to_sleep(u32 spm_flags, u32 spm_data)
 	aee_rr_rec_spm_suspend_val(aee_rr_curr_spm_suspend_val() | (1 << SPM_SUSPEND_ENTER_WFI));
 #endif
 
+#if defined(CONFIG_ARCH_MT6580)
+	gic_set_primask();
+#endif
 	spm_trigger_wfi_for_sleep(pwrctrl);
+#if defined(CONFIG_ARCH_MT6580)
+	gic_clear_primask();
+#endif
 
 #if !defined(CONFIG_ARCH_MT6580)
 	mt_cpufreq_set_pmic_phase(PMIC_WRAP_PHASE_NORMAL);

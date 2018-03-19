@@ -49,11 +49,21 @@
 	WAKE_SRC_USB_PDN | WAKE_SRC_SEJ | WAKE_SRC_AFE | WAKE_SRC_CIRQ | WAKE_SRC_MD1_VRF18_WAKE | \
 	WAKE_SRC_SYSPWREQ | WAKE_SRC_MD_WDT | WAKE_SRC_CLDMA_MD)
 #elif defined(CONFIG_ARCH_MT6753)
+
+#if defined(CONFIG_MICROTRUST_TEE_SUPPORT)
+#define WAKE_SRC_FOR_DPIDLE \
+	(WAKE_SRC_KP | WAKE_SRC_GPT | WAKE_SRC_EINT | WAKE_SRC_CONN_WDT | \
+	WAKE_SRC_CCIF0_MD | WAKE_SRC_CCIF1_MD | WAKE_SRC_CONN2AP | WAKE_SRC_USB_CD | \
+	WAKE_SRC_USB_PDN | WAKE_SRC_AFE | WAKE_SRC_CIRQ | WAKE_SRC_MD1_VRF18_WAKE | \
+	WAKE_SRC_SYSPWREQ | WAKE_SRC_MD_WDT | WAKE_SRC_C2K_WDT | WAKE_SRC_CLDMA_MD)
+#else
 #define WAKE_SRC_FOR_DPIDLE \
 	(WAKE_SRC_KP | WAKE_SRC_GPT | WAKE_SRC_EINT | WAKE_SRC_CONN_WDT | \
 	WAKE_SRC_CCIF0_MD | WAKE_SRC_CCIF1_MD | WAKE_SRC_CONN2AP | WAKE_SRC_USB_CD | \
 	WAKE_SRC_USB_PDN | WAKE_SRC_SEJ | WAKE_SRC_AFE | WAKE_SRC_CIRQ | WAKE_SRC_MD1_VRF18_WAKE | \
 	WAKE_SRC_SYSPWREQ | WAKE_SRC_MD_WDT | WAKE_SRC_C2K_WDT | WAKE_SRC_CLDMA_MD)
+#endif
+	
 #elif defined(CONFIG_ARCH_MT6580)
 #define WAKE_SRC_FOR_DPIDLE \
 	(WAKE_SRC_KP | WAKE_SRC_GPT | WAKE_SRC_EINT | WAKE_SRC_CONN_WDT| \
@@ -1027,6 +1037,7 @@ static wake_reason_t spm_output_wake_reason(struct wake_status *wakesta, struct 
 	wake_reason_t wr = WR_NONE;
 	unsigned long int dpidle_log_print_curr_time = 0;
 	bool log_print = false;
+	static bool timer_out_too_short;
 
 	if (dump_log == DEEPIDLE_LOG_FULL) {
 		wr = __spm_output_wake_reason(wakesta, pcmdesc, false);
@@ -1036,22 +1047,30 @@ static wake_reason_t spm_output_wake_reason(struct wake_status *wakesta, struct 
 
 		if (wakesta->assert_pc != 0)
 			log_print = true;
+#if 0
 		/* Not wakeup by GPT */
 		else if ((wakesta->r12 & (0x1 << 4)) == 0)
 			log_print = true;
 		else if (wakesta->timer_out <= DPIDLE_LOG_PRINT_TIMEOUT_CRITERIA)
 			log_print = true;
+#endif
 		else if ((dpidle_log_print_curr_time - dpidle_log_print_prev_time) >
 			 DPIDLE_LOG_DISCARD_CRITERIA)
 			log_print = true;
 
+		if (wakesta->timer_out <= DPIDLE_LOG_PRINT_TIMEOUT_CRITERIA)
+			timer_out_too_short = true;
+
 		/* Print SPM log */
 		if (log_print == true) {
-			dpidle_dbg("dpidle_log_discard_cnt = %d\n", dpidle_log_discard_cnt);
+			dpidle_dbg("dpidle_log_discard_cnt = %d, timer_out_too_short = %d\n",
+						dpidle_log_discard_cnt,
+						timer_out_too_short);
 			wr = __spm_output_wake_reason(wakesta, pcmdesc, false);
 
 			dpidle_log_print_prev_time = dpidle_log_print_curr_time;
 			dpidle_log_discard_cnt = 0;
+			timer_out_too_short = false;
 		} else {
 			dpidle_log_discard_cnt++;
 
@@ -1071,24 +1090,20 @@ static u32 vsram_vosel_on_lb;
 #endif
 static void spm_dpidle_pre_process(void)
 {
-#if !defined(CONFIG_ARCH_MT6580)
 	/* set PMIC WRAP table for deepidle power control */
 	mt_cpufreq_set_pmic_phase(PMIC_WRAP_PHASE_DEEPIDLE);
 #if defined(CONFIG_ARM_MT6735) || defined(CONFIG_ARM_MT6735M) || defined(CONFIG_ARCH_MT6753)
 	vsram_vosel_on_lb = __spm_dpidle_sodi_set_pmic_setting();
 #endif
-#endif
 }
 
 static void spm_dpidle_post_process(void)
 {
-#if !defined(CONFIG_ARCH_MT6580)
 #if defined(CONFIG_ARM_MT6735) || defined(CONFIG_ARM_MT6735M) || defined(CONFIG_ARCH_MT6753)
 	__spm_dpidle_sodi_restore_pmic_setting(vsram_vosel_on_lb);
 #endif
 	/* set PMIC WRAP table for normal power control */
 	mt_cpufreq_set_pmic_phase(PMIC_WRAP_PHASE_NORMAL);
-#endif
 }
 
 wake_reason_t spm_go_to_dpidle(u32 spm_flags, u32 spm_data, u32 dump_log)
@@ -1153,7 +1168,14 @@ wake_reason_t spm_go_to_dpidle(u32 spm_flags, u32 spm_data, u32 dump_log)
 #ifdef SPM_DEEPIDLE_PROFILE_TIME
 	gpt_get_cnt(SPM_PROFILE_APXGPT, &dpidle_profile[1]);
 #endif
+#if defined(CONFIG_ARCH_MT6580)
+	gic_set_primask();
+#endif
 	spm_trigger_wfi_for_dpidle(pwrctrl);
+
+#if defined(CONFIG_ARCH_MT6580)
+	gic_clear_primask();
+#endif
 #ifdef SPM_DEEPIDLE_PROFILE_TIME
 	gpt_get_cnt(SPM_PROFILE_APXGPT, &dpidle_profile[2]);
 #endif

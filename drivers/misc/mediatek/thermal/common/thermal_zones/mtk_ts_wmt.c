@@ -979,11 +979,13 @@ static int wmt_cl_pa1_set_cur_state(struct thermal_cooling_device *cool_dev, uns
 	if (0 == wifi_throttle_version) {
 		wmt_tm_dprintk("[%s] %lu\n", __func__, v);
 
-		if (pg_wmt_tm)
+		if (pg_wmt_tm) {
 			p_linux_if = &pg_wmt_tm->linux_if;
-		else
-			ret = -1;
-
+			if (p_linux_if == NULL)
+				return -1;
+		} else {
+			return -1;
+		}
 /* cl_pa1_dev_state = (unsigned int)v; */
 
 		if (cl_pa1_dev_state == 1)
@@ -1031,10 +1033,13 @@ static int wmt_cl_pa2_set_cur_state(struct thermal_cooling_device *cool_dev, uns
 	if (0 == wifi_throttle_version) {
 		wmt_tm_dprintk("[%s] %lu\n", __func__, v);
 
-		if (pg_wmt_tm)
+		if (pg_wmt_tm) {
 			p_linux_if = &pg_wmt_tm->linux_if;
-		else
-			ret = -1;
+			if (p_linux_if == NULL)
+				return -1;
+		} else {
+			return -1;
+		}
 
 		cl_pa2_dev_state = (unsigned int)v;
 
@@ -1461,6 +1466,14 @@ static ssize_t wmt_tm_write(struct file *filp, const char __user *buf, size_t co
 			p_linux_if->thz_dev = NULL;
 		}
 
+		if (g_num_trip < 0 || g_num_trip > 10) {
+			aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "wmt_tm_write",
+					"Bad argument");
+			wmt_tm_info("[%s] bad argument = %s\n", __func__, ptr_tm_data->desc);
+			kfree(ptr_tm_data);
+			return -EINVAL;
+		}
+
 		for (i = 0; i < g_num_trip; i++)
 			g_thermal_trip[i] = ptr_tm_data->thermal_trip[i];
 
@@ -1528,6 +1541,8 @@ static ssize_t wmt_tm_write(struct file *filp, const char __user *buf, size_t co
 	}
 
 	wmt_tm_info("[%s] bad argument = %s\n", __func__, ptr_tm_data->desc);
+	aee_kernel_warning_api(__FILE__, __LINE__, DB_OPT_DEFAULT, "wmt_tm_write",
+			"Bad argument");
 	kfree(ptr_tm_data);
 	return -EINVAL;
 }
@@ -1645,10 +1660,8 @@ static int wmt_tm_proc_register(void)
 	if (!wmt_thro_proc_dir) {
 		wmt_tm_printk("[wmt_tm_proc_register]: mkdir /proc/wmt_tm failed\n");
 	} else {
-		entry =
-		    proc_create("tx_thro", S_IRUGO | S_IWUSR, wmt_thro_proc_dir, &_tx_thro_fops);
-		entry =
-		    proc_create("tx_thro_limit", S_IRUGO | S_IWUSR, wmt_thro_proc_dir,
+		proc_create("tx_thro", S_IRUGO | S_IWUSR, wmt_thro_proc_dir, &_tx_thro_fops);
+		proc_create("tx_thro_limit", S_IRUGO | S_IWUSR, wmt_thro_proc_dir,
 				&_tx_thro_limit_fops);
 	}
 

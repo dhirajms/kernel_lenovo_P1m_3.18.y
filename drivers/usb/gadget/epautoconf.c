@@ -11,6 +11,7 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/init.h>
 #include <linux/types.h>
 #include <linux/device.h>
 
@@ -57,7 +58,7 @@ ep_matches (
 		return 0;
 
 	/* only support ep0 for portable CONTROL traffic */
-	type = usb_endpoint_type(desc);
+	type = desc->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK;
 	if (USB_ENDPOINT_XFER_CONTROL == type)
 		return 0;
 

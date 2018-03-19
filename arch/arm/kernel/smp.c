@@ -53,8 +53,8 @@
 #include "mt_sched_mon.h"
 #endif
 #include <mt-plat/mtk_ram_console.h>
+#include <hotplug.h>
 
-#include <trace/events/power.h>
 #define CREATE_TRACE_POINTS
 #include <trace/events/ipi.h>
 
@@ -255,6 +255,13 @@ void __cpu_die(unsigned int cpu)
 		printk("CPU%u: unable to kill\n", cpu);
 }
 
+#ifdef CONFIG_MTK_IRQ_NEW_DESIGN
+void  __attribute__((weak)) gic_set_primask(void)
+{
+
+}
+#endif
+
 /*
  * Called from the idle thread for the CPU which has been shutdown.
  *
@@ -272,6 +279,10 @@ void __ref cpu_die(void)
 	idle_task_exit();
 
 	aee_rr_rec_hoplug(cpu, 52, 0);
+
+#ifdef CONFIG_MTK_IRQ_NEW_DESIGN
+	gic_set_primask();
+#endif
 
 	local_irq_disable();
 
@@ -904,34 +915,12 @@ static DEFINE_PER_CPU(unsigned long, l_p_j_ref);
 static DEFINE_PER_CPU(unsigned long, l_p_j_ref_freq);
 static unsigned long global_l_p_j_ref;
 static unsigned long global_l_p_j_ref_freq;
-static DEFINE_PER_CPU(atomic_long_t, cpu_max_freq);
-DEFINE_PER_CPU(atomic_long_t, cpu_freq_capacity);
-
-/*
- * Scheduler load-tracking scale-invariance
- *
- * Provides the scheduler with a scale-invariance correction factor that
- * compensates for frequency scaling through arch_scale_freq_capacity()
- * (implemented in topology.c).
- */
-static inline
-void scale_freq_capacity(int cpu, unsigned long curr, unsigned long max)
-{
-	unsigned long capacity;
-
-	if (!max)
-		return;
-
-	capacity = (curr << SCHED_CAPACITY_SHIFT) / max;
-	atomic_long_set(&per_cpu(cpu_freq_capacity, cpu), capacity);
-}
 
 static int cpufreq_callback(struct notifier_block *nb,
 					unsigned long val, void *data)
 {
 	struct cpufreq_freqs *freq = data;
 	int cpu = freq->cpu;
-	unsigned long max = atomic_long_read(&per_cpu(cpu_max_freq, cpu));
 
 	if (freq->flags & CPUFREQ_CONST_LOOPS)
 		return NOTIFY_OK;
@@ -956,12 +945,6 @@ static int cpufreq_callback(struct notifier_block *nb,
 					per_cpu(l_p_j_ref_freq, cpu),
 					freq->new);
 	}
-
-	if (val == CPUFREQ_PRECHANGE) {
-		scale_freq_capacity(cpu, freq->new, max);
-		trace_cpu_capacity(capacity_curr_of(cpu), cpu);
-	}
-
 	return NOTIFY_OK;
 }
 
@@ -969,38 +952,11 @@ static struct notifier_block cpufreq_notifier = {
 	.notifier_call  = cpufreq_callback,
 };
 
-static int cpufreq_policy_callback(struct notifier_block *nb,
-						unsigned long val, void *data)
-{
-	struct cpufreq_policy *policy = data;
-	int i;
-
-	if (val != CPUFREQ_NOTIFY)
-		return NOTIFY_OK;
-
-	for_each_cpu(i, policy->cpus) {
-		scale_freq_capacity(i, policy->cur, policy->max);
-		atomic_long_set(&per_cpu(cpu_max_freq, i), policy->max);
-	}
-
-	return NOTIFY_OK;
-}
-
-static struct notifier_block cpufreq_policy_notifier = {
-	.notifier_call	= cpufreq_policy_callback,
-};
-
 static int __init register_cpufreq_notifier(void)
 {
-	int ret;
-
-	ret = cpufreq_register_notifier(&cpufreq_notifier,
+	return cpufreq_register_notifier(&cpufreq_notifier,
 						CPUFREQ_TRANSITION_NOTIFIER);
-	if (ret)
-		return ret;
-
-	return cpufreq_register_notifier(&cpufreq_policy_notifier,
-						CPUFREQ_POLICY_NOTIFIER);
 }
 core_initcall(register_cpufreq_notifier);
+
 #endif

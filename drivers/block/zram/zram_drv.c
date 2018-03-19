@@ -126,8 +126,8 @@ static struct zram_table_entry *search_node_in_zram_list(struct zram *zram, stru
 				list_node = list_node->next;
 				zs_unmap_object(meta->mem_pool, current_node->handle);
 			} else {
-				pr_warn("[ZSM] current node is not ready %x and handle is %x\n",
-					current_node->copy_index, current_node->handle, current_node->handle);
+				pr_warn("[ZSM] current node is not ready %x and handle is %lx\n",
+					current_node->copy_index, current_node->handle);
 				list_node = list_node->next;
 			}
 		}
@@ -254,9 +254,6 @@ static int remove_node_from_zram_list(struct zram *zram, struct zram_meta *meta,
 			while (current_index != index) {
 				i++;
 				if (i >= 4096 && (i%1000 == 0)) {
-					pr_err("[ZRAM]can't find meta->table[%d].size %d chunksum %lx\n"
-						, index, TABLE_GET_SIZE(meta->table[index].value)
-						, meta->table[index].checksum);
 					if (i > meta->table[index].copy_count) {
 						BUG_ON(1);
 						break;
@@ -279,9 +276,6 @@ static int remove_node_from_zram_list(struct zram *zram, struct zram_meta *meta,
 				if (i >= 4096 && (i%1000 == 0)) {
 					u32 tmp_index = 0;
 
-					pr_warn("[ZRAM]!!can't find2 meta->table[%d].size %d chunksum %lx\n"
-						, index, TABLE_GET_SIZE(meta->table[index].value),
-						meta->table[index].checksum);
 					tmp_index = meta->table[current_index].copy_index;
 					if (i > meta->table[tmp_index].copy_count) {
 						BUG_ON(1);
@@ -715,7 +709,7 @@ static void zram_free_page(struct zram *zram, size_t index)
 	struct zram_meta *meta = zram->meta;
 	unsigned long handle = meta->table[index].handle;
 #ifdef CONFIG_ZSM
-	int ret;
+	int ret = 0;
 #endif
 	if (unlikely(!handle)) {
 		/*
@@ -1512,6 +1506,16 @@ static void destroy_device(struct zram *zram)
 	put_disk(zram->disk);
 
 	blk_cleanup_queue(zram->queue);
+}
+
+unsigned long zram_mlog(void)
+{
+#define P2K(x) (((unsigned long)x) << (PAGE_SHIFT - 10))
+	if (num_devices == 1 && init_done(zram_devices))
+		return P2K(zs_get_total_pages(zram_devices->meta->mem_pool));
+#undef P2K
+
+	return 0;
 }
 
 #ifdef CONFIG_PROC_FS

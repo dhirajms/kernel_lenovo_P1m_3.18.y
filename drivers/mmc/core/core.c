@@ -29,7 +29,6 @@
 #include <linux/random.h>
 #include <linux/slab.h>
 #include <linux/of.h>
-#include <linux/wakelock.h>
 
 #include <trace/events/mmc.h>
 
@@ -41,6 +40,7 @@
 #ifdef MTK_BKOPS_IDLE_MAYA
 #include <linux/workqueue.h>
 #endif
+#include <linux/blkdev.h>
 #include "core.h"
 #include "bus.h"
 #include "host.h"
@@ -60,7 +60,6 @@
 #define MMC_BKOPS_MAX_TIMEOUT	(4 * 60 * 1000) /* max time to wait in ms */
 
 static struct workqueue_struct *workqueue;
-static struct wake_lock mmc_delayed_work_wake_lock;
 static const unsigned freqs[] = { 400000, 300000, 200000, 100000 };
 
 /*
@@ -95,7 +94,6 @@ module_param(use_spi_crc, bool, 0);
 static int mmc_schedule_delayed_work(struct delayed_work *work,
 				     unsigned long delay)
 {
-	wake_lock(&mmc_delayed_work_wake_lock);
 	return queue_delayed_work(workqueue, work, delay);
 }
 
@@ -709,6 +707,10 @@ struct mmc_async_req *mmc_start_req(struct mmc_host *host,
 {
 	int err = 0;
 	int start_err = 0;
+#if defined(FEATURE_STORAGE_PERF_INDEX)
+	unsigned long long time1 = 0;
+	unsigned int idx = 0;
+#endif
 	struct mmc_async_req *data = host->areq;
 
 	/* Prepare a new request */
@@ -725,6 +727,33 @@ struct mmc_async_req *mmc_start_req(struct mmc_host *host,
 			 * nothing to return
 			 */
 			return NULL;
+		} else {
+#if defined(FEATURE_STORAGE_PERF_INDEX)
+			time1 = sched_clock();
+
+			idx = find_mmcqd_index();
+			if (start_async_req[idx] == 1) {
+
+
+				mmcqd_rq_count[idx]++;
+
+				if (host->areq->mrq->data->flags == MMC_DATA_WRITE) {
+
+					mmcqd_wr_rq_count[idx]++;
+					mmcqd_rq_size_wr[idx] +=
+						((host->areq->mrq->data->blocks) * (host->areq->mrq->data->blksz));
+					mmcqd_t_usage_wr[idx] += time1 - start_async_req_time[idx];
+				} else if (host->areq->mrq->data->flags == MMC_DATA_READ) {
+
+					mmcqd_rd_rq_count[idx]++;
+					mmcqd_rq_size_rd[idx] +=
+						((host->areq->mrq->data->blocks) * (host->areq->mrq->data->blksz));
+					mmcqd_t_usage_rd[idx] += time1 - start_async_req_time[idx];
+				}
+
+				start_async_req[idx] = 0;
+			}
+#endif
 		}
 		/*
 		 * Check BKOPS urgency for each R1 response
@@ -741,6 +770,11 @@ struct mmc_async_req *mmc_start_req(struct mmc_host *host,
 				       areq->mrq->cmd->arg,
 				       areq->mrq->data);
 		start_err = __mmc_start_data_req(host, areq->mrq);
+#if defined(FEATURE_STORAGE_PERF_INDEX)
+		start_async_req[idx] = 1;
+		start_async_req_time[idx] = sched_clock();
+#endif
+
 	}
 
 	if (host->areq)
@@ -2581,7 +2615,6 @@ void mmc_rescan(struct work_struct *work)
 	struct mmc_host *host =
 		container_of(work, struct mmc_host, detect.work);
 	int i;
-	bool extend_wakelock = false;
 
 	if (host->trigger_card_event && host->ops->card_event) {
 		host->ops->card_event(host);
@@ -2607,12 +2640,6 @@ void mmc_rescan(struct work_struct *work)
 		host->bus_ops->detect(host);
 
 	host->detect_change = 0;
-
-	/* If the card was removed the bus will be marked
-	 * as dead - extend the wakelock so userspace
-	 * can respond */
-	if (host->bus_dead)
-		extend_wakelock = 1;
 
 	/*
 	 * Let mmc_bus_put() free the bus/bus_ops if we've found that
@@ -2643,20 +2670,14 @@ void mmc_rescan(struct work_struct *work)
 
 	mmc_claim_host(host);
 	for (i = 0; i < ARRAY_SIZE(freqs); i++) {
-		if (!mmc_rescan_try_freq(host, max(freqs[i], host->f_min))) {
-			extend_wakelock = true;
+		if (!mmc_rescan_try_freq(host, max(freqs[i], host->f_min)))
 			break;
-		}
 		if (freqs[i] <= host->f_min)
 			break;
 	}
 	mmc_release_host(host);
 
  out:
-	if (extend_wakelock)
-		wake_lock_timeout(&mmc_delayed_work_wake_lock, HZ / 2);
-	else
-		wake_unlock(&mmc_delayed_work_wake_lock);
 	if (host->caps & MMC_CAP_NEEDS_POLL)
 		mmc_schedule_delayed_work(&host->detect, HZ);
 }
@@ -2889,8 +2910,6 @@ static int __init mmc_init(void)
 	if (!workqueue)
 		return -ENOMEM;
 
-	wake_lock_init(&mmc_delayed_work_wake_lock, WAKE_LOCK_SUSPEND,
-		       "mmc_delayed_work");
 
 	ret = mmc_register_bus();
 	if (ret)
@@ -2912,7 +2931,6 @@ unregister_bus:
 	mmc_unregister_bus();
 destroy_workqueue:
 	destroy_workqueue(workqueue);
-	wake_lock_destroy(&mmc_delayed_work_wake_lock);
 
 	return ret;
 }
@@ -2923,7 +2941,6 @@ static void __exit mmc_exit(void)
 	mmc_unregister_host_class();
 	mmc_unregister_bus();
 	destroy_workqueue(workqueue);
-	wake_lock_destroy(&mmc_delayed_work_wake_lock);
 }
 
 subsys_initcall(mmc_init);

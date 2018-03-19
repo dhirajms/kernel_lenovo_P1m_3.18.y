@@ -1037,11 +1037,8 @@ INT32 wmt_plat_i2s_ctrl(ENUM_PIN_STATE state)
 						gpio_ctrl_state[GPIO_COMBO_I2S_WS_PIN].gpio_state[GPIO_PULL_DIS]);
 				pinctrl_select_state(gpio_ctrl_info.pinctrl_info, gpio_ctrl_info.
 						gpio_ctrl_state[GPIO_COMBO_I2S_DAT_PIN].gpio_state[GPIO_PULL_DIS]);
-				if (gpio_ctrl_info.pinctrl_info, gpio_ctrl_info.
+				pinctrl_select_state(gpio_ctrl_info.pinctrl_info, gpio_ctrl_info.
 						gpio_ctrl_state[GPIO_COMBO_PCM_DAIPMCOUT_PIN].
-						gpio_state[GPIO_PULL_DIS])
-					pinctrl_select_state(gpio_ctrl_info.pinctrl_info, gpio_ctrl_info.
-							gpio_ctrl_state[GPIO_COMBO_PCM_DAIPMCOUT_PIN].
 							gpio_state[GPIO_PULL_DIS]);
 				WMT_DBG_FUNC("WMT-PLAT:<Merge IF>I2S init (I2S0 system)\n");
 				break;

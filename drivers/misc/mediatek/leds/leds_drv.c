@@ -29,6 +29,7 @@
 /* #include <mach/mt_pmic_feature_api.h> */
 /* #include <mach/mt_boot.h> */
 #include <leds_hal.h>
+#include <linux/gpio.h>
 #include "leds_drv.h"
 #include <mt-plat/mt_pwm.h>
 #include <mt-plat/upmu_common.h>
@@ -583,6 +584,31 @@ static ssize_t show_pwm_register(struct device *dev,
 static DEVICE_ATTR(pwm_register, 0664, show_pwm_register, store_pwm_register);
 #endif
 
+/*********************** GPIO ****************************/
+long flashlight_led_setby_gpio(char *led_name, int level)
+{
+	gpio_direction_output(42, 0);
+	gpio_direction_output(43, 0);
+
+	if ((level > 0) && (level <= 128))
+	{
+		gpio_direction_output(42, 1);
+		gpio_direction_output(43, 0);
+	}
+	else if ((level > 128) && (level <= 255))
+	{
+		gpio_direction_output(42, 0);
+		gpio_direction_output(43, 1);
+	}	
+	else
+	{
+		gpio_direction_output(42, 0);
+	    gpio_direction_output(43, 0);
+	}
+
+	return 0;
+}
+
 #ifdef BACKLIGHT_SUPPORT_LP8557
 static int led_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id);
 static int led_i2c_remove(struct i2c_client *client);
@@ -656,6 +682,10 @@ static int mt65xx_leds_probe(struct platform_device *pdev)
 		g_leds_data[i]->cust.mode = cust_led_list[i].mode;
 		g_leds_data[i]->cust.data = cust_led_list[i].data;
 		g_leds_data[i]->cust.name = cust_led_list[i].name;
+		if (!strncmp("lcd-backlight", g_leds_data[i]->cust.name, sizeof("lcd-backlight"))) {
+			g_leds_data[i]->level = 255;
+			g_leds_data[i]->cdev.brightness = 255;
+		}
 
 		g_leds_data[i]->cdev.name = cust_led_list[i].name;
 		g_leds_data[i]->cust.config_data = cust_led_list[i].config_data;	/* bei add */
@@ -793,6 +823,9 @@ static void mt65xx_leds_shutdown(struct platform_device *pdev)
 		case MT65XX_LED_MODE_CUST_BLS_PWM:
 			LEDS_DRV_DEBUG("backlight control through BLS!!1\n");
 			((cust_set_brightness) (g_leds_data[i]->cust.data)) (0);
+			break;
+		case MT65XX_LED_MODE_CUST_FLASH:
+			((cust_flashlight_brightness_set)(g_leds_data[i]->cust.data))(g_leds_data[i]->cust.name, 0);
 			break;
 		case MT65XX_LED_MODE_NONE:
 		default:

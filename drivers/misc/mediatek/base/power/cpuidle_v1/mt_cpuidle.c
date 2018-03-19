@@ -913,7 +913,7 @@ int mt_cpu_dormant(unsigned long flags)
 #else
 	dormant_data[0].poc.cpu_resume_phys = (void (*)(void))(long)virt_to_phys(cpu_resume);
 #ifdef CONFIG_TRUSTONIC_TEE_SUPPORT
-	mt_secure_call(MC_FC_SLEEP, virt_to_phys(cpu_resume), cpuid, 0);
+	mt_secure_call(MC_FC_MTK_SLEEP, virt_to_phys(cpu_resume), cpuid, 0);
 #elif defined(CONFIG_TRUSTY) && defined(CONFIG_ARCH_MT6580)
 	mt_trusty_call(SMC_FC_CPU_DORMANT, virt_to_phys(cpu_resume), cpuid, 0);
 #else
@@ -934,10 +934,10 @@ int mt_cpu_dormant(unsigned long flags)
 			mt_secure_call(MC_FC_SET_RESET_VECTOR, virt_to_phys(cpu_wake_up_errata_802022), 3, 0);
 		}
 #elif defined(CONFIG_TRUSTY) && defined(CONFIG_ARCH_MT6580)
-		mt_trusty_call(SMC_FC_CPU_ON, virt_to_phys(cpu_wake_up_errata_802022), 1, 0);
+		mt_trusty_call(SMC_FC_CPU_ON, virt_to_phys(cpu_wake_up_errata_802022), 1, 1);
 		if (num_possible_cpus() == 4) {
-			mt_trusty_call(SMC_FC_CPU_ON, virt_to_phys(cpu_wake_up_errata_802022), 2, 0);
-			mt_trusty_call(SMC_FC_CPU_ON, virt_to_phys(cpu_wake_up_errata_802022), 3, 0);
+			mt_trusty_call(SMC_FC_CPU_ON, virt_to_phys(cpu_wake_up_errata_802022), 2, 1);
+			mt_trusty_call(SMC_FC_CPU_ON, virt_to_phys(cpu_wake_up_errata_802022), 3, 1);
 		}
 #endif
 		spm_mtcmos_ctrl_cpu1(STA_POWER_ON, 1);

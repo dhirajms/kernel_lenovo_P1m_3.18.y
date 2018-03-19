@@ -231,18 +231,31 @@ inline struct AE_Msg *msg_create(char **ppmsg, int extra_size)
 	return (struct AE_Msg *) *ppmsg;
 }
 
-static ssize_t msg_copy_to_user(const char *prefix, const char *msg, char __user *buf,
+static ssize_t msg_copy_to_user(const char *prefix, char *msg, char __user *buf,
 				size_t count, loff_t *f_pos)
 {
 	ssize_t ret = 0;
 	int len;
-
-	msg_show(prefix, (struct AE_Msg *) msg);
+	char *msg_tmp = NULL;
 
 	if (msg == NULL)
 		return 0;
 
-	len = ((struct AE_Msg *) msg)->len + sizeof(struct AE_Msg);
+	msg_show(prefix, (struct AE_Msg *) msg);
+
+	msg_tmp = kzalloc(((struct AE_Msg *)msg)->len + sizeof(struct AE_Msg), GFP_KERNEL);
+	if (msg_tmp != NULL) {
+		memcpy(msg_tmp, msg, ((struct AE_Msg *)msg)->len + sizeof(struct AE_Msg));
+	} else {
+		LOGE("%s : kzalloc() fail!\n", __func__);
+		msg_tmp = msg;
+	}
+
+	if (msg_tmp == NULL || ((struct AE_Msg *)msg_tmp)->cmdType < AE_REQ
+		|| ((struct AE_Msg *)msg_tmp)->cmdType > AE_CMD_TYPE_END)
+		goto out;
+
+	len = ((struct AE_Msg *) msg_tmp)->len + sizeof(struct AE_Msg);
 
 	if (*f_pos >= len) {
 		ret = 0;
@@ -256,7 +269,7 @@ static ssize_t msg_copy_to_user(const char *prefix, const char *msg, char __user
 		goto out;
 	}
 
-	if (copy_to_user(buf, msg + *f_pos, count)) {
+	if (copy_to_user(buf, msg_tmp + *f_pos, count)) {
 		LOGE("copy_to_user failed\n");
 		ret = -EFAULT;
 		goto out;
@@ -264,6 +277,8 @@ static ssize_t msg_copy_to_user(const char *prefix, const char *msg, char __user
 	*f_pos += count;
 	ret = count;
  out:
+	if (msg_tmp != msg)
+		kfree(msg_tmp);
 	return ret;
 }
 
@@ -1344,6 +1359,7 @@ static long aed_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			/* Try to prevent overrun */
 			dal_show->msg[sizeof(dal_show->msg) - 1] = 0;
 #ifdef CONFIG_MTK_FB
+			LOGD("AEE CALL DAL_Printf now\n");
 			DAL_Printf("%s", dal_show->msg);
 #endif
 
@@ -1362,7 +1378,9 @@ static long aed_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			dal_setcolor.background = 0xff0000;	/*red */
 
 #ifdef CONFIG_MTK_FB
+			LOGD("AEE CALL DAL_SetColor now\n");
 			DAL_SetColor(dal_setcolor.foreground, dal_setcolor.background);
+			LOGD("AEE CALL DAL_Clean now\n");
 			DAL_Clean();
 #endif
 			break;
@@ -1383,7 +1401,9 @@ static long aed_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				goto EXIT;
 			}
 #ifdef CONFIG_MTK_FB
+			LOGD("AEE CALL DAL_SetColor now\n");
 			DAL_SetColor(dal_setcolor.foreground, dal_setcolor.background);
+			LOGD("AEE CALL DAL_SetScreenColor now\n");
 			DAL_SetScreenColor(dal_setcolor.screencolor);
 #endif
 			break;
@@ -1811,11 +1831,14 @@ void aee_kernel_dal_api(const char *file, const int line, const char *msg)
 			&& (force_red_screen == AEE_FORCE_RED_SCREEN))) {
 			dal_setcolor.foreground = 0xff00ff;	/* fg: purple */
 			dal_setcolor.background = 0x00ff00;	/* bg: green */
+			LOGD("AEE CALL DAL_SetColor now\n");
 			DAL_SetColor(dal_setcolor.foreground, dal_setcolor.background);
 			dal_setcolor.screencolor = 0xff0000;	/* screen:red */
+			LOGD("AEE CALL DAL_SetScreenColor now\n");
 			DAL_SetScreenColor(dal_setcolor.screencolor);
 			strncpy(dal_show->msg, msg, sizeof(dal_show->msg) - 1);
 			dal_show->msg[sizeof(dal_show->msg) - 1] = 0;
+			LOGD("AEE CALL DAL_Printf now\n");
 			DAL_Printf("%s", dal_show->msg);
 		} else {
 			LOGD("DAL not allowed (mode %d)\n", aee_mode);
@@ -1914,6 +1937,7 @@ static struct aee_kernel_api kernel_api = {
 	.kernel_reportAPI = kernel_reportAPI,
 	.md_exception = external_exception,
 	.md32_exception = external_exception,
+	.scp_exception = external_exception,
 	.combo_exception = external_exception
 };
 

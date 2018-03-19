@@ -79,6 +79,7 @@ extern struct mt_cpu_info *mt_cpu_info_head;
 extern int mt_cpu_num;
 extern struct mt_proc_struct *mt_proc_head;
 extern unsigned long long prof_start_ts, prof_end_ts, prof_dur_ts;
+extern bool boot_trace;
 
 void mt_task_times(struct task_struct *p, cputime_t *ut, cputime_t *st);
 unsigned long long mtprof_get_cpu_idle(int cpu);
@@ -87,13 +88,3 @@ unsigned long long mtprof_get_cpu_iowait(int cpu);
 void start_record_task(void);
 void stop_record_task(void);
 void reset_record_task(void);
-
-#include <asm/hardirq.h>
-
-#define MAX_NR_IRQS 512
-extern int mt_irq_count[NR_CPUS][MAX_NR_IRQS];
-#ifdef CONFIG_SMP
-extern int mt_local_irq_count[NR_CPUS][NR_IPI];
-#endif
-extern unsigned long long mt_save_irq_count_time;
-extern spinlock_t mt_irq_count_lock;

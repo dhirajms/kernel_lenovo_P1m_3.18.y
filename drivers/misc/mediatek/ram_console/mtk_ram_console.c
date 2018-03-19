@@ -22,6 +22,7 @@
 #include <linux/io.h>
 #include <mach/wd_api.h>
 #include "ram_console.h"
+#include <mt-plat/mt_debug_latch.h>
 
 #define RAM_CONSOLE_HEADER_STR_LEN 1024
 
@@ -54,6 +55,7 @@ struct last_reboot_reason {
 	uint32_t mcdi_wfi;
 	uint32_t mcdi_r15;
 	uint32_t deepidle_data;
+	uint32_t sodi3_data;
 	uint32_t sodi_data;
 	uint32_t spm_suspend_data;
 	uint64_t cpu_dormant[NR_CPUS];
@@ -86,6 +88,7 @@ struct last_reboot_reason {
 	uint8_t thermal_temp5;
 	uint8_t thermal_status;
 
+	uint8_t isr_el1;
 
 	void *kparams;
 };
@@ -173,8 +176,10 @@ void last_kmsg_store_to_emmc(void)
 /* if(num_online_cpus() > 1){ */
 	if (wd_api->wd_get_check_bit() > 1) {
 		pr_err("ram_console: online cpu %d!\n", wd_api->wd_get_check_bit());
+#ifdef CONFIG_MTPROF
 		if (boot_finish == 0)
 			return;
+#endif
 	}
 
 	/* save log to emmc */
@@ -210,6 +215,55 @@ static const struct file_operations ram_console2_file_ops = {
 	.release = single_release,
 };
 
+static int emmc_read_last_kmsg(void *data)
+{
+	int ret;
+	struct file *filp;
+
+	struct proc_dir_entry *entry;
+	struct ram_console_buffer *bufp = NULL;
+	int timeout = 0;
+
+	ram_console2_log = kzalloc(ram_console_buffer->sz_buffer, GFP_KERNEL);
+	if (ram_console2_log == NULL)
+		return 1;
+
+	do {
+		filp = expdb_open();
+		if (timeout++ > 60) {
+			pr_err("ram_console: open expdb partition error [%ld]!\n", PTR_ERR(filp));
+			return 1;
+		}
+		msleep(500);
+	} while (IS_ERR(filp));
+	ret = kernel_read(filp, EMMC_ADDR, ram_console2_log, ram_console_buffer->sz_buffer);
+	fput(filp);
+	if (IS_ERR(ERR_PTR(ret))) {
+		kfree(ram_console2_log);
+		ram_console2_log = NULL;
+		pr_err("ram_console: read emmc data 2 error!\n");
+		return 1;
+	}
+
+	bufp = (struct ram_console_buffer *)ram_console2_log;
+	if (bufp->sig != REBOOT_REASON_SIG) {
+		kfree(ram_console2_log);
+		ram_console2_log = NULL;
+		pr_err("ram_console: emmc read data sig is not match!\n");
+		return 1;
+	}
+
+	entry = proc_create("last_kmsg2", 0444, NULL, &ram_console2_file_ops);
+	if (!entry) {
+		pr_err("ram_console: failed to create proc entry\n");
+		kfree(ram_console2_log);
+		ram_console2_log = NULL;
+		return 1;
+	}
+	pr_err("ram_console: create last_kmsg2 ok.\n");
+	return 0;
+
+}
 #else
 void last_kmsg_store_to_emmc(void)
 {
@@ -241,8 +295,8 @@ void pstore_console_show(enum pstore_type_id type_id, struct seq_file *m, void *
 		goto out;
 
 	while ((size = psi->read(&id, &type, &count, &time, &buf, &compressed, psi)) > 0) {
-		pr_err("ram_console: id %lld, type %d, count %d, size %zx\n", id, type, count,
-		       size);
+		/*pr_err("ram_console: id %lld, type %d, count %d, size %zx\n", id, type, count,
+		       size);*/
 		if (type == type_id)
 			seq_write(m, buf, size);
 		kfree(buf);
@@ -410,9 +464,9 @@ static int ram_console_lastk_show(struct ram_console_buffer *buffer, struct seq_
 		   wdt_status, LAST_RRR_BUF_VAL(buffer, fiq_step));
 
 #ifdef CONFIG_PSTORE_CONSOLE
-	pr_err("ram_console: pstore show start\n");
+	/*pr_err("ram_console: pstore show start\n");*/
 	pstore_console_show(PSTORE_TYPE_CONSOLE, m, v);
-	pr_err("ram_console: pstore show end\n");
+	/*pr_err("ram_console: pstore show end\n");*/
 #else
 	if (buffer->off_console != 0
 	    && buffer->off_linux + ALIGN(sizeof(struct last_reboot_reason),
@@ -604,6 +658,14 @@ static int __init ram_console_late_init(void)
 
 #ifdef CONFIG_MTK_EMMC_SUPPORT
 #ifdef CONFIG_MTK_AEE_IPANIC
+	int err;
+	static struct task_struct *thread;
+
+	thread = kthread_run(emmc_read_last_kmsg, 0, "read_poweroff_log");
+	if (IS_ERR(thread)) {
+		err = PTR_ERR(thread);
+		pr_err("ram_console: failed to create kernel thread: %d\n", err);
+	}
 #endif
 #endif
 	entry = proc_create("last_kmsg", 0444, NULL, &ram_console_file_ops);
@@ -804,6 +866,20 @@ void aee_rr_rec_sodi_val(u32 val)
 	if (!ram_console_init_done || !ram_console_buffer)
 		return;
 	LAST_RR_SET(sodi_data, val);
+}
+
+void aee_rr_rec_sodi3_val(u32 val)
+{
+	if (!ram_console_init_done)
+		return;
+	LAST_RR_SET(sodi3_data, val);
+}
+
+u32 aee_rr_curr_sodi3_val(void)
+{
+	if (!ram_console_init_done)
+		return 0;
+	return LAST_RR_VAL(sodi3_data);
 }
 
 u32 aee_rr_curr_sodi_val(void)
@@ -1016,6 +1092,12 @@ void aee_rr_rec_thermal_status(u8 val)
 	LAST_RR_SET(thermal_status, val);
 }
 
+void aee_rr_rec_isr_el1(u8 val)
+{
+	if (!ram_console_init_done || !ram_console_buffer)
+		return;
+	LAST_RR_SET(isr_el1, val);
+}
 
 u64 aee_rr_curr_ptp_cpu_big_volt(void)
 {
@@ -1070,6 +1152,11 @@ u8 aee_rr_curr_thermal_temp5(void)
 u8 aee_rr_curr_thermal_status(void)
 {
 	return LAST_RR_VAL(thermal_status);
+}
+
+u8 aee_rr_curr_isr_el1(void)
+{
+	return LAST_RR_VAL(isr_el1);
 }
 
 void aee_rr_rec_suspend_debug_flag(u32 val)
@@ -1165,6 +1252,11 @@ void aee_rr_show_mcdi_r15(struct seq_file *m)
 void aee_rr_show_deepidle(struct seq_file *m)
 {
 	seq_printf(m, "deepidle: 0x%x\n", LAST_RRR_VAL(deepidle_data));
+}
+
+void aee_rr_show_sodi3(struct seq_file *m)
+{
+	seq_printf(m, "sodi3: 0x%x\n", LAST_RRR_VAL(sodi3_data));
 }
 
 void aee_rr_show_sodi(struct seq_file *m)
@@ -1289,6 +1381,11 @@ void aee_rr_show_thermal_status(struct seq_file *m)
 	seq_printf(m, "thermal_status: %d\n", LAST_RRR_VAL(thermal_status));
 }
 
+void aee_rr_show_isr_el1(struct seq_file *m)
+{
+	seq_printf(m, "isr_el1: %d\n", LAST_RRR_VAL(isr_el1));
+}
+
 __weak uint32_t get_suspend_debug_flag(void)
 {
 	return LAST_RR_VAL(suspend_debug_flag);
@@ -1317,15 +1414,36 @@ void aee_rr_show_last_pc(struct seq_file *m)
 	}
 }
 
+int __weak mt_lastbus_dump(char *buf)
+{
+	return 1;
+}
+
+void aee_rr_show_last_bus(struct seq_file *m)
+{
+	char *reg_buf = kmalloc(4096, GFP_KERNEL);
+
+	if (reg_buf) {
+		if (mt_lastbus_dump) {
+			mt_lastbus_dump(reg_buf);
+			seq_printf(m, "%s\n", reg_buf);
+		}
+		kfree(reg_buf);
+	}
+}
+
+
 last_rr_show_t aee_rr_show[] = {
 	aee_rr_show_wdt_status,
 	aee_rr_show_fiq_step,
 	aee_rr_show_exp_type,
 	aee_rr_show_last_pc,
+	aee_rr_show_last_bus,
 	aee_rr_show_mcdi,
 	aee_rr_show_mcdi_r15,
 	aee_rr_show_suspend_debug_flag,
 	aee_rr_show_deepidle,
+	aee_rr_show_sodi3,
 	aee_rr_show_sodi,
 	aee_rr_show_spm_suspend,
 	aee_rr_show_vcore_dvfs_opp,
@@ -1344,7 +1462,8 @@ last_rr_show_t aee_rr_show[] = {
 	aee_rr_show_ptp_temp,
 	aee_rr_show_ptp_status,
 	aee_rr_show_thermal_temp,
-	aee_rr_show_thermal_status
+	aee_rr_show_thermal_status,
+	aee_rr_show_isr_el1
 };
 
 last_rr_show_cpu_t aee_rr_show_cpu[] = {
@@ -1358,6 +1477,12 @@ last_rr_show_cpu_t aee_rr_show_cpu[] = {
 	aee_rr_show_cpu_dormant,
 };
 
+last_rr_show_t aee_rr_last_xxx[] = {
+	aee_rr_show_last_pc,
+	aee_rr_show_last_bus,
+	aee_rr_show_suspend_debug_flag
+};
+
 #define array_size(x) (sizeof(x) / sizeof((x)[0]))
 int aee_rr_reboot_reason_show(struct seq_file *m, void *v)
 {
@@ -1365,6 +1490,9 @@ int aee_rr_reboot_reason_show(struct seq_file *m, void *v)
 
 	if (ram_console_check_header(ram_console_old)) {
 		seq_puts(m, "NO VALID DATA.\n");
+		seq_puts(m, "Only try to dump last_XXX.\n");
+		for (i = 0; i < array_size(aee_rr_last_xxx); i++)
+			aee_rr_last_xxx[i] (m);
 		return 0;
 	}
 	for (i = 0; i < array_size(aee_rr_show); i++)

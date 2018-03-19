@@ -840,7 +840,6 @@
 #if CFG_SUPPORT_AGPS_ASSIST
 #include <net/netlink.h>
 #endif
-#include <linux/firmware.h>
 
 /*******************************************************************************
 *                              C O N S T A N T S
@@ -884,9 +883,14 @@ static UINT_32 pvIoBufferUsage;
 */
 #if CFG_ENABLE_FW_DOWNLOAD
 
+static struct file *filp;
+static uid_t orgfsuid;
+static gid_t orgfsgid;
+static mm_segment_t orgfs;
 
 static PUINT_8 apucFwPath[] = {
-	(PUINT_8) "/",
+	(PUINT_8) "/storage/sdcard0/",
+	(PUINT_8) "/etc/firmware/",
 	NULL
 };
 
@@ -920,8 +924,6 @@ static PPUINT_8 appucFwNameTable[] = {
 	apucFwNameE3,
 };
 
-static const struct firmware *wififw;
-static const struct firmware *wificfg;
 /*----------------------------------------------------------------------------*/
 /*!
 * \brief This function is provided by GLUE Layer for internal driver stack to
@@ -937,17 +939,28 @@ static const struct firmware *wificfg;
 WLAN_STATUS kalFirmwareOpen(IN P_GLUE_INFO_T prGlueInfo)
 {
 	UINT_8 ucPathIdx, ucNameIdx;
-	UINT_8 aucFwName[128];
-	UINT_8 ucResultFW = FALSE;
-	BOOLEAN fgResult = FALSE;
 	PPUINT_8 apucNameTable;
 	UINT_8 ucMaxEcoVer = (sizeof(appucFwNameTable) / sizeof(PPUINT_8));
 	UINT_8 ucCurEcoVer = wlanGetEcoVersion(prGlueInfo->prAdapter);
-
+	UINT_8 aucFwName[128];
+	BOOLEAN fgResult = FALSE;
 
 	/* FIX ME: since we don't have hotplug script in the filesystem
 	 * , so the request_firmware() KAPI can not work properly
 	 */
+
+	/* save uid and gid used for filesystem access.
+	 * set user and group to 0(root) */
+	struct cred *cred = (struct cred *)get_current_cred();
+
+	orgfsuid = cred->fsuid.val;
+	orgfsgid = cred->fsgid.val;
+	cred->fsuid.val = cred->fsgid.val = 0;
+
+	ASSERT(prGlueInfo);
+
+	orgfs = get_fs();
+	set_fs(get_ds());
 
 	/* Get FW name table */
 	if (ucMaxEcoVer < ucCurEcoVer)
@@ -961,11 +974,10 @@ WLAN_STATUS kalFirmwareOpen(IN P_GLUE_INFO_T prGlueInfo)
 
 			kalSprintf(aucFwName, "%s%s", apucFwPath[ucPathIdx], apucNameTable[ucNameIdx]);
 
-			ucResultFW = request_firmware(&wififw, apucNameTable[ucNameIdx], NULL);
-			if (ucResultFW != 0) {
+			filp = filp_open(aucFwName, O_RDONLY, 0);
+			if (IS_ERR(filp)) {
 				DBGLOG(INIT, TRACE, "Open FW image: %s failed, errno[%d]\n",
-						     aucFwName, ucResultFW);
-				release_firmware(wififw);
+						     aucFwName, ERR_PTR((LONG) filp));
 				continue;
 			} else {
 				DBGLOG(INIT, TRACE, "Open FW image: %s done\n", aucFwName);
@@ -977,11 +989,39 @@ WLAN_STATUS kalFirmwareOpen(IN P_GLUE_INFO_T prGlueInfo)
 		if (fgResult)
 			break;
 	}
-	DBGLOG(INIT, ERROR, "The reuqest firmware result is %d\n ", fgResult);
 
-	if (fgResult)
-		return WLAN_STATUS_SUCCESS;
+	/* Check result */
+	if (fgResult) {
+		DBGLOG(INIT, INFO, "Open FW image: %s done\n", aucFwName);
+	} else {
+		DBGLOG(INIT, ERROR, "Open FW image failed! Cur/Max ECO Ver[E%u/E%u]\n", ucCurEcoVer, ucMaxEcoVer);
 
+		/* Dump tried FW path/name */
+		for (ucPathIdx = 0; apucFwPath[ucPathIdx]; ucPathIdx++) {
+			for (ucNameIdx = 0; apucNameTable[ucNameIdx]; ucNameIdx++) {
+
+				kalSprintf(aucFwName, "%s%s", apucFwPath[ucPathIdx], apucNameTable[ucNameIdx]);
+
+				filp = filp_open(aucFwName, O_RDONLY, 0);
+				if (IS_ERR(filp)) {
+					DBGLOG(INIT, INFO, "Open FW image: %s failed, errno[%d]\n",
+							    aucFwName, ERR_PTR((LONG) filp));
+				} else {
+					DBGLOG(INIT, INFO, "Open FW image: %s done\n", aucFwName);
+				}
+			}
+		}
+		goto error_open;
+	}
+
+	return WLAN_STATUS_SUCCESS;
+
+error_open:
+	/* restore */
+	set_fs(orgfs);
+	cred->fsuid.val = orgfsuid;
+	cred->fsgid.val = orgfsgid;
+	put_cred(cred);
 	return WLAN_STATUS_FAILURE;
 }
 
@@ -1001,8 +1041,21 @@ WLAN_STATUS kalFirmwareClose(IN P_GLUE_INFO_T prGlueInfo)
 {
 	ASSERT(prGlueInfo);
 
-	release_firmware(wififw);
-	wififw = NULL;
+	if ((filp != NULL) && !IS_ERR(filp)) {
+		/* close firmware file */
+		filp_close(filp, NULL);
+
+		/* restore */
+		set_fs(orgfs);
+		{
+			struct cred *cred = (struct cred *)get_current_cred();
+
+			cred->fsuid.val = orgfsuid;
+			cred->fsgid.val = orgfsgid;
+			put_cred(cred);
+		}
+		filp = NULL;
+	}
 
 	return WLAN_STATUS_SUCCESS;
 }
@@ -1025,14 +1078,15 @@ WLAN_STATUS kalFirmwareLoad(IN P_GLUE_INFO_T prGlueInfo, OUT PVOID prBuf, IN UIN
 	ASSERT(pu4Size);
 	ASSERT(prBuf);
 
-	if (wififw == NULL)
-		goto error_read;
+	/* l = filp->f_path.dentry->d_inode->i_size; */
 
-	if (wififw->data) {
-		memcpy(prBuf, wififw->data, wififw->size);
-		*pu4Size = wififw->size;
-	} else
+	/* the object must have a read method */
+	if ((filp == NULL) || IS_ERR(filp) || (filp->f_op == NULL) || (filp->f_op->read == NULL)) {
 		goto error_read;
+	} else {
+		filp->f_pos = u4Offset;
+		*pu4Size = filp->f_op->read(filp, prBuf, *pu4Size, &filp->f_pos);
+	}
 
 	return WLAN_STATUS_SUCCESS;
 
@@ -1058,17 +1112,9 @@ WLAN_STATUS kalFirmwareSize(IN P_GLUE_INFO_T prGlueInfo, OUT PUINT_32 pu4Size)
 	ASSERT(prGlueInfo);
 	ASSERT(pu4Size);
 
-	if (wififw == NULL)
-		goto error_read;
-
-	*pu4Size = wififw->size;
-
-	DBGLOG(INIT, TRACE, "FW image size: %d done\n", *pu4Size);
+	*pu4Size = filp->f_path.dentry->d_inode->i_size;
 
 	return WLAN_STATUS_SUCCESS;
-
-error_read:
-	return WLAN_STATUS_FAILURE;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -1698,6 +1744,9 @@ kalIndicateStatusAndComplete(IN P_GLUE_INFO_T prGlueInfo, IN WLAN_STATUS eStatus
 		} while (0);
 
 		if (prGlueInfo->fgIsRegistered == TRUE) {
+			struct cfg80211_bss *bss_others = NULL;
+			UINT_8 ucLoopCnt = 15; /* only loop 15 times to avoid dead loop */
+
 			/* retrieve channel */
 			ucChannelNum =
 			    wlanGetChannelNumberByNetwork(prGlueInfo->prAdapter,
@@ -1736,6 +1785,18 @@ kalIndicateStatusAndComplete(IN P_GLUE_INFO_T prGlueInfo, IN WLAN_STATUS eStatus
 								RCPI_TO_dBm(prBssDesc->ucRCPI) * 100,	/* MBM */
 								GFP_KERNEL);
 				}
+			}
+			/* remove all bsses that before and only channel different with the current connected one
+				if without this patch, UI will show channel A is connected even if AP has change channel
+				from A to B */
+			while (ucLoopCnt--) {
+				bss_others = cfg80211_get_bss(priv_to_wiphy(prGlueInfo), NULL, arBssid,
+						ssid.aucSsid, ssid.u4SsidLen, WLAN_CAPABILITY_ESS, WLAN_CAPABILITY_ESS);
+				if (bss && bss_others && bss_others != bss) {
+					DBGLOG(SCN, INFO, "remove BSSes that only channel different\n");
+					cfg80211_unlink_bss(priv_to_wiphy(prGlueInfo), bss_others);
+				} else
+					break;
 			}
 
 			/* CFG80211 Indication */
@@ -1810,12 +1871,14 @@ kalIndicateStatusAndComplete(IN P_GLUE_INFO_T prGlueInfo, IN WLAN_STATUS eStatus
 		/* indicate scan complete event */
 		wext_indicate_wext_event(prGlueInfo, SIOCGIWSCAN, NULL, 0);
 
+		DBGLOG(SCN, EVENT, "scan complete, cfg80211 scan request is %p\n", prGlueInfo->prScanRequest);
 		/* 1. reset first for newly incoming request */
 		GLUE_ACQUIRE_SPIN_LOCK(prGlueInfo, SPIN_LOCK_NET_DEV);
 		if (prGlueInfo->prScanRequest != NULL) {
 			prScanRequest = prGlueInfo->prScanRequest;
 			prGlueInfo->prScanRequest = NULL;
-		}
+		} else
+			DBGLOG(SCN, WARN, "scan complete but cfg80211 scan request is NULL\n");
 		GLUE_RELEASE_SPIN_LOCK(prGlueInfo, SPIN_LOCK_NET_DEV);
 
 		/* 2. then CFG80211 Indication */
@@ -4292,36 +4355,104 @@ UINT_32 kalGetMfpSetting(IN P_GLUE_INFO_T prGlueInfo)
 }
 #endif
 
-
-INT_32 kalReadToFile(const PUINT_8 pucPath, PUINT_8 pucData, UINT_32 u4Size, PUINT_32 pu4ReadSize)
+struct file *kalFileOpen(const char *path, int flags, int rights)
 {
-	UINT_8 ucResultFW = FALSE;
-	INT_32 ret = -1;
+	struct file *filp = NULL;
+	mm_segment_t oldfs;
+	int err = 0;
 
-	DBGLOG(INIT, TRACE, "kalReadToFile() path %s\n", pucPath);
-
-	ucResultFW = request_firmware(&wificfg, pucPath, NULL);
-	if (ucResultFW != 0) {
-		DBGLOG(INIT, TRACE, "Open FW image: %s failed, %d\n",
-					 pucPath, ucResultFW);
-		return ret;
+	oldfs = get_fs();
+	set_fs(get_ds());
+	filp = filp_open(path, flags, rights);
+	set_fs(oldfs);
+	if (IS_ERR(filp)) {
+		err = PTR_ERR(filp);
+		return NULL;
 	}
+	return filp;
+}
 
-	if (wificfg == NULL)
-		return ret;
+VOID kalFileClose(struct file *file)
+{
+	filp_close(file, NULL);
+}
 
-	if (wificfg->data) {
-		*pu4ReadSize = wificfg->size;
-		memcpy(pucData, wificfg->data, wificfg->size);
-		DBGLOG(INIT, TRACE, "kalReadToFile() wificfg->size= %d\n", wificfg->size);
-		ret = 0;
-	}
+UINT_32 kalFileRead(struct file *file, unsigned long long offset, unsigned char *data, unsigned int size)
+{
+	mm_segment_t oldfs;
+	int ret;
 
-	release_firmware(wificfg);
+	oldfs = get_fs();
+	set_fs(get_ds());
+
+	ret = vfs_read(file, data, size, &offset);
+
+	set_fs(oldfs);
+	return ret;
+}
+
+UINT_32 kalFileWrite(struct file *file, unsigned long long offset, unsigned char *data, unsigned int size)
+{
+	mm_segment_t oldfs;
+	int ret;
+
+	oldfs = get_fs();
+	set_fs(get_ds());
+
+	ret = vfs_write(file, data, size, &offset);
+
+	set_fs(oldfs);
+	return ret;
+}
+
+UINT_32 kalWriteToFile(const PUINT_8 pucPath, BOOLEAN fgDoAppend, PUINT_8 pucData, UINT_32 u4Size)
+{
+	struct file *file = NULL;
+	UINT_32 ret;
+	UINT_32 u4Flags = 0;
+
+	if (fgDoAppend)
+		u4Flags = O_APPEND;
+
+	file = kalFileOpen(pucPath, O_WRONLY | O_CREAT | u4Flags, S_IRWXU);
+	ret = kalFileWrite(file, 0, pucData, u4Size);
+	kalFileClose(file);
 
 	return ret;
 }
 
+INT_32 kalReadToFile(const PUINT_8 pucPath, PUINT_8 pucData, UINT_32 u4Size, PUINT_32 pu4ReadSize)
+{
+	struct file *file = NULL;
+	INT_32 ret = -1;
+	UINT_32 u4ReadSize = 0;
+
+	DBGLOG(INIT, TRACE, "kalReadToFile() path %s\n", pucPath);
+
+	file = kalFileOpen(pucPath, O_RDONLY, 0);
+
+	if ((file != NULL) && !IS_ERR(file)) {
+		u4ReadSize = kalFileRead(file, 0, pucData, u4Size);
+		kalFileClose(file);
+		if (pu4ReadSize)
+			*pu4ReadSize = u4ReadSize;
+		ret = 0;
+	}
+	return ret;
+}
+
+UINT_32 kalCheckPath(const PUINT_8 pucPath)
+{
+	struct file *file = NULL;
+	UINT_32 u4Flags = 0;
+
+	file = kalFileOpen(pucPath, O_WRONLY | O_CREAT | u4Flags, S_IRWXU);
+	if (!file)
+		return -1;
+
+	kalFileClose(file);
+	return 1;
+}
 
 /*----------------------------------------------------------------------------*/
 /*!
