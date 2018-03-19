@@ -2235,7 +2235,6 @@ again:
 #ifdef CONFIG_MTK_NET_LOGGING
 			unsigned long sk_ino = SOCK_INODE(sk->sk_socket)->i_ino;
 
-<<<<<<< HEAD
 			pr_debug("[mtk_net][unix]: recvmsg[%lu:null]:exit read due to timeout\n", sk__ino);
 #endif
 					}
@@ -2245,11 +2244,9 @@ again:
 #endif
 				}
 			}
-			if (signal_pending(current)
-			    ||  mutex_lock_interruptible(&u->readlock)) {
-=======
+
 			if (signal_pending(current)) {
->>>>>>> v3.18.100
+
 				err = sock_intr_errno(timeo);
 				goto out;
 			}

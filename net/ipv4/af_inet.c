@@ -271,14 +271,11 @@ static int inet_create(struct net *net, struct socket *sock, int protocol,
 	unsigned char answer_flags;
 	int try_loading_module = 0;
 	int err;
-
-<<<<<<< HEAD
 	if (!current_has_network())
 		return -EACCES;
-=======
+
 	if (protocol < 0 || protocol >= IPPROTO_MAX)
 		return -EINVAL;
->>>>>>> v3.18.100
 
 	sock->state = SS_UNCONNECTED;
 
@@ -1905,4 +1902,3 @@ static int __init ipv4_proc_init(void)
 #endif /* CONFIG_PROC_FS */
 
 MODULE_ALIAS_NETPROTO(PF_INET);
-
