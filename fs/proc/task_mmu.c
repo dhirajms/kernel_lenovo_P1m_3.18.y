@@ -503,16 +503,16 @@ struct mem_size_stats {
 #ifdef CONFIG_ZNDSWAP
 	u64 pswap_zndswap;
 #endif
+	u64 swap_pss;
 };
 
-<<<<<<< HEAD
 #ifdef CONFIG_SWAP
 static inline unsigned char swap_count(unsigned char ent)
 {
 	return ent & ~SWAP_HAS_CACHE;	/* may include SWAP_HAS_CONT flag */
 }
 #endif
-=======
+
 static void smaps_account(struct mem_size_stats *mss, struct page *page,
 		unsigned long size, bool young, bool dirty)
 {
@@ -520,7 +520,6 @@ static void smaps_account(struct mem_size_stats *mss, struct page *page,
 
 	if (PageAnon(page))
 		mss->anonymous += size;
->>>>>>> v3.18.100
 
 	mss->resident += size;
 	/* Accumulate the size in pages that have been accessed. */
@@ -559,43 +558,26 @@ static void smaps_pte_entry(pte_t *pte, unsigned long addr,
 	} else if (is_swap_pte(*pte)) {
 		swp_entry_t swpent = pte_to_swp_entry(*pte);
 
-<<<<<<< HEAD
 		/* M for pswap interface */
 		if (!non_swap_entry(swpent)) {
-#ifdef CONFIG_SWAP
-			swp_entry_t entry;
-			struct swap_info_struct *p;
-#endif /* CONFIG_SWAP*/
-			mss->swap += ptent_size;
-#ifdef CONFIG_SWAP
-			entry = pte_to_swp_entry(ptent);
-			if (non_swap_entry(entry))
-				return;
-			p = swap_info_get(entry);
-			if (p) {
-				int swapcount = swap_count(p->swap_map[swp_offset(entry)]);
+			int mapcount;
+			u64 pss_delta = (u64)PAGE_SIZE << PSS_SHIFT;
 
-				if (swapcount == 0)
-					swapcount = 1;
-
-#ifdef CONFIG_ZNDSWAP
-				/* It indicates 2ndswap ONLY */
-				if (swp_type(entry) == 1UL)
-					mss->pswap_zndswap += (ptent_size << PSS_SHIFT) / swapcount;
-				else
-					mss->pswap += (ptent_size << PSS_SHIFT) / swapcount;
-#else
-				mss->pswap += (ptent_size << PSS_SHIFT) / swapcount;
-#endif
-				swap_info_unlock(p);
-			}
-#endif /* CONFIG_SWAP*/
-		} else if (is_migration_entry(swpent))
-=======
-		if (!non_swap_entry(swpent))
 			mss->swap += PAGE_SIZE;
-		else if (is_migration_entry(swpent))
->>>>>>> v3.18.100
+//			mapcount = page_swapcount(swpent);
+			if (mapcount >= 2)
+				do_div(pss_delta, mapcount);
+			mss->swap_pss += pss_delta;
+#ifdef CONFIG_ZNDSWAP
+			/* It indicates 2ndswap ONLY */
+			if (swp_type(swpent) == 1UL)
+				mss->pswap_zndswap += pss_delta;
+			else
+				mss->pswap += pss_delta;
+#else
+			mss->swap += pss_delta;
+#endif
+		} else if (is_migration_entry(swpent))
 			page = migration_entry_to_page(swpent);
 	} else if (pte_file(*pte)) {
 		if (pte_to_pgoff(*pte) != pgoff)
@@ -759,6 +741,7 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 #ifdef CONFIG_ZNDSWAP
 		   "PSwap_zndswap:  %8lu kB\n"
 #endif
+		   "SwapPss:        %8lu kB\n"
 		   "KernelPageSize: %8lu kB\n"
 		   "MMUPageSize:    %8lu kB\n"
 		   "Locked:         %8lu kB\n",
@@ -779,6 +762,7 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 #ifdef CONFIG_ZNDSWAP
 		   (unsigned long)(mss.pswap_zndswap >> (10 + PSS_SHIFT)),
 #endif
+		   (unsigned long)(mss.swap_pss >> (10 + PSS_SHIFT)),
 		   vma_kernel_pagesize(vma) >> 10,
 		   vma_mmu_pagesize(vma) >> 10,
 		   (vma->vm_flags & VM_LOCKED) ?
@@ -1358,40 +1342,33 @@ static int pagemap_hugetlb_range(pte_t *pte, unsigned long hmask,
 static ssize_t pagemap_read(struct file *file, char __user *buf,
 			    size_t count, loff_t *ppos)
 {
-	struct task_struct *task = get_proc_task(file_inode(file));
-	struct mm_struct *mm;
+	struct mm_struct *mm = file->private_data;
 	struct pagemapread pm;
-	int ret = -ESRCH;
 	struct mm_walk pagemap_walk = {};
 	unsigned long src;
 	unsigned long svpfn;
 	unsigned long start_vaddr;
 	unsigned long end_vaddr;
-	int copied = 0;
+	int ret = 0, copied = 0;
 
-	if (!task)
+	if (!mm || !atomic_inc_not_zero(&mm->mm_users))
 		goto out;
 
 	ret = -EINVAL;
 	/* file position must be aligned */
 	if ((*ppos % PM_ENTRY_BYTES) || (count % PM_ENTRY_BYTES))
-		goto out_task;
+		goto out_mm;
 
 	ret = 0;
 	if (!count)
-		goto out_task;
+		goto out_mm;
 
 	pm.v2 = soft_dirty_cleared;
 	pm.len = (PAGEMAP_WALK_SIZE >> PAGE_SHIFT);
 	pm.buffer = kmalloc(pm.len * PM_ENTRY_BYTES, GFP_TEMPORARY);
 	ret = -ENOMEM;
 	if (!pm.buffer)
-		goto out_task;
-
-	mm = mm_access(task, PTRACE_MODE_READ);
-	ret = PTR_ERR(mm);
-	if (!mm || IS_ERR(mm))
-		goto out_free;
+		goto out_mm;
 
 	pagemap_walk.pmd_entry = pagemap_pte_range;
 	pagemap_walk.pte_hole = pagemap_pte_hole;
@@ -1404,10 +1381,10 @@ static ssize_t pagemap_read(struct file *file, char __user *buf,
 	src = *ppos;
 	svpfn = src / PM_ENTRY_BYTES;
 	start_vaddr = svpfn << PAGE_SHIFT;
-	end_vaddr = TASK_SIZE_OF(task);
+	end_vaddr = mm->task_size;
 
 	/* watch out for wraparound */
-	if (svpfn > TASK_SIZE_OF(task) >> PAGE_SHIFT)
+	if (svpfn > mm->task_size >> PAGE_SHIFT)
 		start_vaddr = end_vaddr;
 
 	/*
@@ -1434,7 +1411,7 @@ static ssize_t pagemap_read(struct file *file, char __user *buf,
 		len = min(count, PM_ENTRY_BYTES * pm.pos);
 		if (copy_to_user(buf, pm.buffer, len)) {
 			ret = -EFAULT;
-			goto out_mm;
+			goto out_free;
 		}
 		copied += len;
 		buf += len;
@@ -1444,24 +1421,38 @@ static ssize_t pagemap_read(struct file *file, char __user *buf,
 	if (!ret || ret == PM_END_OF_BUFFER)
 		ret = copied;
 
-out_mm:
-	mmput(mm);
 out_free:
 	kfree(pm.buffer);
-out_task:
-	put_task_struct(task);
+out_mm:
+	mmput(mm);
 out:
 	return ret;
 }
 
 static int pagemap_open(struct inode *inode, struct file *file)
 {
+	struct mm_struct *mm;
+
 	/* do not disclose physical addresses: attack vector */
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 	pr_warn_once("Bits 55-60 of /proc/PID/pagemap entries are about "
 			"to stop being page-shift some time soon. See the "
 			"linux/Documentation/vm/pagemap.txt for details.\n");
+
+	mm = proc_mem_open(inode, PTRACE_MODE_READ);
+	if (IS_ERR(mm))
+		return PTR_ERR(mm);
+	file->private_data = mm;
+	return 0;
+}
+
+static int pagemap_release(struct inode *inode, struct file *file)
+{
+	struct mm_struct *mm = file->private_data;
+
+	if (mm)
+		mmdrop(mm);
 	return 0;
 }
 
@@ -1469,6 +1460,7 @@ const struct file_operations proc_pagemap_operations = {
 	.llseek		= mem_lseek, /* borrow this */
 	.read		= pagemap_read,
 	.open		= pagemap_open,
+	.release	= pagemap_release,
 };
 #endif /* CONFIG_PROC_PAGE_MONITOR */
 
